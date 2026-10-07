@@ -1,0 +1,161 @@
+{
+  "issue_date": "01/10/2026",
+  "sections": [
+    {
+      "general_topic": "Remuneraciones",
+      "sub_topics": [
+        {
+          "name": "Sueldos",
+          "value": 13314915
+        },
+        {
+          "name": "Aguinaldo",
+          "value": 362656
+        },
+        {
+          "name": "Servicios de Administración",
+          "value": 2599249
+        },
+        {
+          "name": "Cotizaciones Previsionales",
+          "value": 3355438
+        }
+      ]
+    },
+    {
+      "general_topic": "Consumos",
+      "sub_topics": [
+        {
+          "name": "Agua Potable",
+          "value": 3072726
+        },
+        {
+          "name": "Telefonía Fija",
+          "value": 83615
+        },
+        {
+          "name": "Telefonía Movil",
+          "value": 8482
+        },
+        {
+          "name": "Electricidad",
+          "value": 5247284
+        },
+        {
+          "name": "Petroleo",
+          "value": 30000
+        },
+        {
+          "name": "Gas Cargo Comun al 30%",
+          "value": 5227536
+        }
+      ]
+    },
+    {
+      "general_topic": "Mantenciones y Servicios",
+      "sub_topics": [
+        {
+          "name": "Mantención Ascensores",
+          "value": 1560343
+        },
+        {
+          "name": "Mantención Aseo Áreas Comunes",
+          "value": 10591000
+        },
+        {
+          "name": "Mantención Control de Acceso",
+          "value": 380800
+        },
+        {
+          "name": "Mantención Sistemas Hidráulicos",
+          "value": 212931
+        },
+        {
+          "name": "Mantención Piscina",
+          "value": 200000
+        },
+        {
+          "name": "Pintura y Demarcación",
+          "value": 1190000
+        },
+        {
+          "name": "Mantención Calderas",
+          "value": 1136421
+        },
+        {
+          "name": "Mantención Plantas y jardines",
+          "value": 1800000
+        }
+      ]
+    },
+    {
+      "general_topic": "Reparaciones y Repuestos",
+      "sub_topics": [
+        {
+          "name": "Reposición Plantas y Jardines",
+          "value": 205000
+        },
+        {
+          "name": "Reparación Calderas",
+          "value": 693925
+        },
+        {
+          "name": "Reparación Bomba de Agua",
+          "value": 1066270
+        }
+      ]
+    },
+    {
+      "general_topic": "Seguros",
+      "sub_topics": [
+        {
+          "name": "Incendio y Misceláneos",
+          "value": 2243977
+        }
+      ]
+    },
+    {
+      "general_topic": "Asesorías y Honorarios Profesionales",
+      "sub_topics": [
+        {
+          "name": "Asesorías Contables",
+          "value": 24324
+        }
+      ]
+    },
+    {
+      "general_topic": "Insumos",
+      "sub_topics": [
+        {
+          "name": "Vestuario Personal Comunidad",
+          "value": 406823
+        },
+        {
+          "name": "Viveres Comunidad",
+          "value": 258820
+        },
+        {
+          "name": "Artículos de Ferretería",
+          "value": 1047907
+        }
+      ]
+    },
+    {
+      "general_topic": "Otros Gastos",
+      "sub_topics": [
+        {
+          "name": "Correspondencia",
+          "value": 80000
+        },
+        {
+          "name": "Aportes y Donaciones",
+          "value": 30000
+        },
+        {
+          "name": "Arriendo maquina transbank",
+          "value": 23855
+        }
+      ]
+    }
+  ]
+}
