@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+
 from data_extractor.ground_truth import GroundTruthData
 from data_extractor.models import ExpenseReport, SectionValidation, ValidationResult
+
+logger = logging.getLogger("data_extractor.validator")
 
 
 def validate_expense_report(
@@ -25,6 +29,14 @@ def validate_expense_report(
     """
     errors: list[str] = []
     section_validations: list[SectionValidation] = []
+
+    # 0. Validate billing period date
+    if ground_truth.period_date is not None:
+        if report.issue_date.strip() != ground_truth.period_date.strip():
+            errors.append(
+                f"Billing period date mismatch: extracted issue_date is '{report.issue_date.strip()}', "
+                f"but document declared period is '{ground_truth.period_date.strip()}'."
+            )
 
     # Map sections by normalized general_topic name
     extracted_sections_map = {
@@ -95,6 +107,20 @@ def validate_expense_report(
         )
 
     is_overall_valid = (len(errors) == 0)
+
+    if not is_overall_valid:
+        sec_mismatches = [sv.general_topic for sv in section_validations if not sv.is_valid]
+        has_grand_mismatch = (ground_truth.grand_total is not None and grand_diff != 0)
+        has_period_mismatch = (
+            ground_truth.period_date is not None
+            and report.issue_date.strip() != ground_truth.period_date.strip()
+        )
+        logger.warning(
+            "Expense report validation failed: section_mismatches=%s, grand_total_mismatch=%s, period_mismatch=%s",
+            sec_mismatches,
+            has_grand_mismatch,
+            has_period_mismatch,
+        )
 
     return ValidationResult(
         is_valid=is_overall_valid,

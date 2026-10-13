@@ -21,6 +21,7 @@ def test_ground_truth_extraction():
     assert PDF_PATH.exists(), f"Sample PDF not found at {PDF_PATH}"
     gt = extract_ground_truth(PDF_PATH)
 
+    assert gt.period_date == "01/09/2026"
     assert gt.grand_total == 56454297
     assert gt.section_totals["Remuneraciones"] == 19632258
     assert gt.section_totals["Consumos"] == 13669643  # includes Gas Cargo Comun
@@ -106,6 +107,62 @@ def test_pydantic_model_invariants():
     with pytest.raises(ValidationError):
         ExpenseReport(issue_date="02/10/2026", sections=[])
 
-    # Negative integer value
-    with pytest.raises(ValidationError):
-        SubTopic(name="Item", value=-500)
+    # Negative integer values are permitted for credit notes and adjustments
+    credit_item = SubTopic(name="Finiquitos", value=-250690)
+    assert credit_item.value == -250690
+
+
+def test_negative_credit_note_validation_2026_7():
+    """Verify that negative line items (e.g. Finiquitos $-250.690) validate cleanly against 2026-7.pdf."""
+    pdf_path = Path(__file__).parent.parent / "examples" / "2026-7.pdf"
+    json_path = Path(__file__).parent.parent / "data" / "output" / "2026-7.json"
+    if not json_path.exists():
+        json_path = Path(__file__).parent.parent / "data" / "output" / "synced" / "2026-7.json"
+    assert pdf_path.exists(), f"Sample PDF not found: {pdf_path}"
+    assert json_path.exists(), f"Output JSON not found: {json_path}"
+
+    with open(json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    report = ExpenseReport.model_validate(data)
+    gt = extract_ground_truth(pdf_path)
+
+    result = validate_expense_report(report, gt)
+    assert result.is_valid is True
+    assert len(result.errors) == 0
+
+    # Ensure Finiquitos is present with negative value
+    rem_section = next(s for s in report.sections if s.general_topic == "Remuneraciones")
+    finiquitos_item = next(it for it in rem_section.sub_topics if it.name == "Finiquitos")
+    assert finiquitos_item.value == -250690
+
+
+def test_validator_detects_period_date_mismatch():
+    """Verify that mismatch between extracted issue_date and ground truth period triggers an error."""
+    with open(FIXTURE_PATH, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    # Tamper with issue_date (e.g. LLM extracted October instead of September)
+    data["issue_date"] = "01/10/2026"
+    report = ExpenseReport.model_validate(data)
+    gt = extract_ground_truth(PDF_PATH)
+
+    result = validate_expense_report(report, gt)
+    assert result.is_valid is False
+    assert any("Billing period date mismatch" in e for e in result.errors)
+
+
+@pytest.mark.parametrize(
+    "pdf_name, expected_period",
+    [
+        ("2026-7.pdf", "01/07/2026"),
+        ("2026-8.pdf", "01/08/2026"),
+        ("2026-9.pdf", "01/09/2026"),
+    ],
+)
+def test_ground_truth_period_across_samples(pdf_name: str, expected_period: str):
+    """Verify that PyMuPDF deterministic ground truth extracts correct period across sample PDFs."""
+    path = Path(__file__).parent.parent / "examples" / pdf_name
+    assert path.exists(), f"Sample PDF not found: {path}"
+    gt = extract_ground_truth(path)
+    assert gt.period_date == expected_period

@@ -18,6 +18,8 @@ from data_extractor.models import ExpenseReport, ExtractionMetadata, ExtractionS
 from data_extractor.prompt_loader import build_self_heal_prompt
 from data_extractor.validator import validate_expense_report
 
+logger = logging.getLogger("data_extractor.workflow")
+
 
 def prepare_document_node(state: ExtractionState) -> dict:
     """Read PDF bytes and extract ground-truth declared totals."""
@@ -30,6 +32,7 @@ def prepare_document_node(state: ExtractionState) -> dict:
         "pdf_bytes": pdf_bytes,
         "ground_truth_totals": gt.section_totals,
         "expected_grand_total": gt.grand_total,
+        "expected_period_date": gt.period_date,
         "retry_count": 0,
         "is_valid": False,
         "errors": [],
@@ -60,6 +63,7 @@ def validate_extraction_node(state: ExtractionState) -> dict:
         }
 
     gt_data = GroundTruthData(
+        period_date=state.get("expected_period_date"),
         grand_total=state.get("expected_grand_total"),
         section_totals=state.get("ground_truth_totals", {}),
     )
@@ -67,6 +71,24 @@ def validate_extraction_node(state: ExtractionState) -> dict:
     validation_result = validate_expense_report(report, gt_data)
     if metadata:
         metadata.validation_status = "PASSED" if validation_result.is_valid else "FAILED"
+
+    if not validation_result.is_valid:
+        failed_sections = [
+            sv.general_topic
+            for sv in validation_result.section_validations
+            if not sv.is_valid
+        ]
+        has_grand_total_mismatch = (
+            validation_result.declared_grand_total is not None
+            and validation_result.grand_total_difference != 0
+        )
+        logger.warning(
+            "Validation discrepancy detected: retry=%d/%d, failing_sections=%s, grand_total_mismatch=%s",
+            state.get("retry_count", 0),
+            state.get("max_retries", 2),
+            failed_sections,
+            has_grand_total_mismatch,
+        )
 
     return {
         "validation_result": validation_result,
@@ -79,6 +101,18 @@ def validate_extraction_node(state: ExtractionState) -> dict:
 def self_heal_node(state: ExtractionState) -> dict:
     """Query model with targeted error feedback to correct discrepancies."""
     current_retry = state.get("retry_count", 0) + 1
+    vr = state.get("validation_result")
+    failed_sections = (
+        [sv.general_topic for sv in vr.section_validations if not sv.is_valid]
+        if vr
+        else []
+    )
+    logger.info(
+        "Initiating self-healing iteration %d/%d for sections: %s",
+        current_retry,
+        state.get("max_retries", 2),
+        failed_sections,
+    )
     feedback = build_self_heal_prompt(state.get("errors", []))
 
     corrected_report, metadata = extract_from_pdf(
@@ -96,8 +130,9 @@ def self_heal_node(state: ExtractionState) -> dict:
 
 def format_output_node(state: ExtractionState) -> dict:
     """Format final validated report and attach operational telemetry."""
-    report = state["report"]
+    report = state.get("report")
     metadata = state.get("metadata")
+    is_valid = state.get("is_valid", False)
 
     if report is None:
         final_dict = {
@@ -120,6 +155,9 @@ def format_output_node(state: ExtractionState) -> dict:
                 for sec in report.sections
             ],
         }
+        if not is_valid:
+            final_dict["_status"] = "FAILED_VALIDATION"
+            final_dict["_errors"] = state.get("errors", [])
 
     if metadata is not None:
         final_dict["_metadata"] = metadata.model_dump()
@@ -208,6 +246,7 @@ def run_workflow(
         "pdf_bytes": resolved_pdf.read_bytes(),
         "ground_truth_totals": {},
         "expected_grand_total": None,
+        "expected_period_date": None,
         "report": None,
         "metadata": None,
         "validation_result": None,
@@ -266,7 +305,10 @@ def load_and_spool_report(
     # If extraction failed cross-validation, route to failed spool
     if not is_valid:
         dest = settings.failed_dir / f"{stem}.json"
-        output_data["_sync"] = {"status": "FAILED_VALIDATION"}
+        output_data["_sync"] = {
+            "status": "FAILED_VALIDATION",
+            "errors": output_data.get("_errors", []),
+        }
         dest.parent.mkdir(parents=True, exist_ok=True)
         with open(dest, "w", encoding="utf-8") as f:
             json.dump(output_data, f, indent=2, ensure_ascii=False)

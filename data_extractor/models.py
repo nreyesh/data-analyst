@@ -14,8 +14,7 @@ class SubTopic(BaseModel):
         description="Clean base name of the item or sub-topic, stripped of voucher/invoice parentheses."
     )
     value: int = Field(
-        ge=0,
-        description="Monetary integer value in Chilean Pesos (CLP), e.g. 13314915.",
+        description="Monetary integer value in Chilean Pesos (CLP), e.g. 13314915. May be negative for credit notes.",
     )
 
 
@@ -35,7 +34,7 @@ class ExpenseReport(BaseModel):
     """Complete structured expense report."""
 
     issue_date: str = Field(
-        description="Emission date normalized strictly to 01/MM/YYYY (e.g. 01/10/2026)."
+        description="Expense billing period date normalized strictly to 01/MM/YYYY (e.g. 01/09/2026 for September 2026)."
     )
     sections: list[Section] = Field(
         default_factory=list,
@@ -109,6 +108,7 @@ class ExtractionState(TypedDict):
     pdf_bytes: bytes
     ground_truth_totals: dict[str, int]
     expected_grand_total: int | None
+    expected_period_date: str | None
     report: ExpenseReport | None
     metadata: ExtractionMetadata | None
     validation_result: ValidationResult | None

@@ -163,16 +163,30 @@ def main() -> None:
         spool_status = result.get("_spool_status", "unknown")
         meta = result.get("_metadata", {})
 
-        print(f"\n✅ Extraction and cross-validation complete!")
-        if spool_status == "synced":
-            print(f"💾 Synced & loaded directly to database: {dest}")
-        elif spool_status == "pending":
-            print(f"⚠️  Backend offline. Staged in pending spool: {dest}")
-            print(f"   (Run 'data-extractor --sync' when backend is online)")
-        elif spool_status == "failed":
-            print(f"❌ Ingestion rejected by backend. Stored in failed spool: {dest}")
+        validation_failed = (
+            result.get("_status") in ("FAILED_VALIDATION", "FAILED")
+            or result.get("_sync", {}).get("status") == "FAILED_VALIDATION"
+        )
+
+        if validation_failed:
+            print(f"\n❌ Extraction finished, but cross-validation FAILED!")
+            print(f"📁 Stored in failed spool: {dest}")
+            errors = result.get("_errors") or result.get("_sync", {}).get("errors", [])
+            if errors:
+                print("\n🔍 Validation Discrepancy Breakdown:")
+                for err in errors:
+                    print(f"   • {err}")
         else:
-            print(f"💾 Saved to: {dest}")
+            print(f"\n✅ Extraction and cross-validation complete!")
+            if spool_status == "synced":
+                print(f"💾 Synced & loaded directly to database: {dest}")
+            elif spool_status == "pending":
+                print(f"⚠️  Backend offline. Staged in pending spool: {dest}")
+                print(f"   (Run 'data-extractor --sync' when backend is online)")
+            elif spool_status == "failed":
+                print(f"❌ Ingestion rejected by backend. Stored in failed spool: {dest}")
+            else:
+                print(f"💾 Saved to: {dest}")
 
         print(f"📅 Issue date: {result.get('issue_date')}")
         print(f"📊 Sections extracted: {len(result.get('sections', []))}")

@@ -18,19 +18,33 @@ def test_invalid_issue_date_format(client: TestClient, sample_payload_2026_9: di
     assert response2.status_code == 422
 
 
-def test_negative_amount_rejected(client: TestClient, sample_payload_2026_9: dict):
-    """Verify that negative line item values trigger HTTP 422."""
-    bad_payload = {
-        "issue_date": "01/10/2026",
+def test_negative_amount_accepted_and_persisted(client: TestClient):
+    """Verify that negative line item values (credit notes) are accepted and persisted."""
+    payload = {
+        "issue_date": "01/07/2026",
         "sections": [
             {
-                "general_topic": "Test",
-                "sub_topics": [{"name": "Negative Item", "value": -100}],
+                "general_topic": "Remuneraciones",
+                "sub_topics": [
+                    {"name": "Sueldos", "value": 1000000},
+                    {"name": "Finiquitos", "value": -250000},
+                ],
             }
         ],
     }
-    response = client.post("/api/v1/reports", json=bad_payload)
-    assert response.status_code == 422
+    response = client.post("/api/v1/reports", json=payload)
+    assert response.status_code == 201
+    data = response.json()
+    assert data["calculated_grand_total"] == 750000
+
+    # Retrieve and verify subtotal and negative line item
+    get_res = client.get(f"/api/v1/reports/{data['id']}")
+    assert get_res.status_code == 200
+    report_data = get_res.json()
+    rem_section = report_data["sections"][0]
+    assert rem_section["calculated_subtotal"] == 750000
+    credit_item = next(it for it in rem_section["items"] if it["name"] == "Finiquitos")
+    assert credit_item["amount"] == -250000
 
 
 def test_empty_sections_rejected(client: TestClient):

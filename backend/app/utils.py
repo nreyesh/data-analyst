@@ -54,6 +54,18 @@ def parse_issue_date(issue_date: str) -> tuple[str, int, int]:
     return period_date, year, month
 
 
+ACCENT_TRANSLATION_MAP = str.maketrans({
+    "á": "a", "é": "e", "í": "i", "ó": "o", "ú": "u", "ü": "u",
+    "Á": "a", "É": "e", "Í": "i", "Ó": "o", "Ú": "u", "Ü": "u",
+    "Ñ": "ñ",
+})
+
+
+def normalize_text(text: str) -> str:
+    """Normalize text by trimming, lowercasing, and stripping vowel accents while preserving 'ñ'."""
+    return text.strip().lower().translate(ACCENT_TRANSLATION_MAP)
+
+
 def normalize_item_name(name: str) -> str:
-    """Normalize item name to stripped lowercase for cross-month analytical queries."""
-    return name.strip().lower()
+    """Normalize item name to stripped lowercase with accents removed for cross-month analytical queries."""
+    return normalize_text(name)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.database import Base
@@ -106,9 +106,8 @@ class ExpenseItemModel(Base):
     )
     amount: Mapped[int] = mapped_column(
         Integer,
-        CheckConstraint("amount >= 0", name="chk_amount_positive"),
         nullable=False,
-        comment="Amount in Chilean Pesos (CLP)",
+        comment="Amount in Chilean Pesos (CLP). May be negative for credit notes",
     )
     display_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 

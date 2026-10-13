@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from backend.app.models import ExpenseItemModel, ExpenseReportModel, ExpenseSectionModel
 from backend.app.schemas import ReportIngestRequest
-from backend.app.utils import normalize_item_name, parse_issue_date
+from backend.app.utils import normalize_item_name, normalize_text, parse_issue_date
 
 
 def find_report_by_period(db: Session, period_date: str) -> ExpenseReportModel | None:
@@ -85,7 +85,7 @@ def save_report(
         grand_total += subtotal
 
         sec_model = ExpenseSectionModel(
-            category_name=sec_req.general_topic.strip(),
+            category_name=normalize_text(sec_req.general_topic),
             calculated_subtotal=subtotal,
             display_order=s_idx,
         )

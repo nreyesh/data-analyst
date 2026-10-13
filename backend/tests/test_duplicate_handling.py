@@ -42,7 +42,7 @@ def test_duplicate_overwrite_updates_content(client: TestClient, sample_payload_
     assert updated_total > initial_total
 
     # Verify query returns updated total
-    by_period = client.get("/api/v1/reports/period/2026-10-01").json()
+    by_period = client.get("/api/v1/reports/period/2026-09-01").json()
     assert by_period["calculated_grand_total"] == updated_total
 
 
@@ -55,7 +55,7 @@ def test_zero_orphaned_records_after_overwrite(
 
     # Overwrite submission with only 1 section and 1 item
     reduced_payload = {
-        "issue_date": "01/10/2026",
+        "issue_date": "01/09/2026",
         "sections": [
             {
                 "general_topic": "Only Section",

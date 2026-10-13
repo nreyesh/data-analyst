@@ -154,3 +154,89 @@ def test_cli_sync_command_execution():
         exit_code = handle_sync_command()
         assert exit_code == 0
         mock_post.assert_called_once()
+
+
+def test_workflow_routes_to_failed_when_invalid_validation(tmp_path: Path, monkeypatch):
+    """Verify that failed cross-validation routes to failed/ spool with errors intact."""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "output_dir", tmp_path)
+    settings.ensure_directories()
+
+    output_data = {
+        "issue_date": "01/10/2026",
+        "sections": [],
+        "_errors": ["Section 'Consumos' sum mismatch: difference: +500 CLP."],
+    }
+
+    dest, spool_status = load_and_spool_report(
+        output_data=output_data,
+        stem="2026-10",
+        is_valid=False,
+    )
+
+    assert spool_status == "failed"
+    assert dest == settings.failed_dir / "2026-10.json"
+    assert dest.exists()
+
+    saved_data = json.loads(dest.read_text(encoding="utf-8"))
+    assert saved_data["_sync"]["status"] == "FAILED_VALIDATION"
+    assert len(saved_data["_sync"]["errors"]) == 1
+    assert "Section 'Consumos' sum mismatch" in saved_data["_sync"]["errors"][0]
+
+
+def test_format_output_node_preserves_status_and_errors():
+    """Verify format_output_node attaches _status: FAILED_VALIDATION and _errors when is_valid is False."""
+    from data_extractor.models import ExpenseReport, Section, SubTopic
+    from data_extractor.workflow import format_output_node
+
+    report = ExpenseReport(
+        issue_date="01/10/2026",
+        sections=[Section(general_topic="Consumos", sub_topics=[SubTopic(name="Agua", value=100)])],
+    )
+    state = {
+        "report": report,
+        "is_valid": False,
+        "errors": ["Section 'Consumos' sum mismatch: difference: -50 CLP."],
+        "metadata": None,
+    }
+
+    res = format_output_node(state)
+    final_output = res["final_output"]
+    assert final_output["_status"] == "FAILED_VALIDATION"
+    assert final_output["_errors"] == ["Section 'Consumos' sum mismatch: difference: -50 CLP."]
+
+
+def test_validation_logging_does_not_leak_amounts(caplog):
+    """Verify that validator logging records structural metadata without leaking CLP amounts."""
+    import logging
+    from data_extractor.ground_truth import GroundTruthData
+    from data_extractor.models import ExpenseReport, Section, SubTopic
+    from data_extractor.validator import validate_expense_report
+
+    report = ExpenseReport(
+        issue_date="01/10/2026",
+        sections=[
+            Section(
+                general_topic="Remuneraciones",
+                sub_topics=[SubTopic(name="Juan Perez", value=12345678)],
+            )
+        ],
+    )
+    gt = GroundTruthData(
+        period_date="01/10/2026",
+        grand_total=99999999,
+        section_totals={"Remuneraciones": 87654321},
+    )
+
+    with caplog.at_level(logging.WARNING, logger="data_extractor.validator"):
+        result = validate_expense_report(report, gt)
+
+    assert result.is_valid is False
+    # Logging was emitted
+    assert any("Expense report validation failed" in record.message for record in caplog.records)
+    # Ensure sensitive amounts and item names were NOT logged in the record messages
+    for record in caplog.records:
+        assert "12345678" not in record.message
+        assert "87654321" not in record.message
+        assert "99999999" not in record.message
+        assert "Juan Perez" not in record.message

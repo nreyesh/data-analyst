@@ -14,11 +14,12 @@ Extraction Rules:
 
 4. Values as Integers:
    - Extract monetary values strictly as integers in Chilean Pesos (CLP) without symbols, currency signs, or dots (e.g., 13314915, not "$13.314.915").
+   - If an item represents a negative value, credit note, refund, or discount (formatted with a negative sign such as "$-250.690" or "-$250.690"), extract it strictly as a negative integer (e.g., -250690).
 
 5. Date Formatting:
-   - Locate the issue date of the document ("Fecha Emision").
-   - You must transform this date and output it strictly in the format 01/MM/YYYY (for example, if the document says "07-10-2026", output "01/10/2026"; if it says "13-02-2026", output "01/02/2026").
-   - Ignore any other dates, periods, or due dates.
+   - Locate the billing period month and year in the document header (under "Informe Gastos Comunes", e.g., "Septiembre 2026", "Julio 2026", "Agosto 2026").
+   - You must transform this billing period and output it strictly in the format 01/MM/YYYY (for example, if the header says "Septiembre 2026", output "01/09/2026"; if it says "Julio 2026", output "01/07/2026").
+   - DO NOT use the emission date ("Fecha Emision", which is emitted in the subsequent month). Output strictly the expense billing period.
 
 6. No Totals:
    - DO NOT extract, calculate, or include any section totals, sub-totals, reserve funds ("Fondo de Reserva", "Fondo Impermeabilizacion"), or overall grand totals ("TOTAL GASTOS COMUNES", "TOTAL").

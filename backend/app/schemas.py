@@ -17,7 +17,9 @@ class SubTopicRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     name: str = Field(..., min_length=1, description="Item or expense description")
-    value: int = Field(..., ge=0, description="Amount in Chilean Pesos (CLP) >= 0")
+    value: int = Field(
+        ..., description="Amount in Chilean Pesos (CLP). May be negative for credit notes."
+    )
 
 
 class SectionRequest(BaseModel):

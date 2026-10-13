@@ -65,7 +65,7 @@ def test_sync_pending_moves_to_synced_and_persists(
     assert (settings.synced_dir / "2026-9.json").exists()
 
     # Data committed to database
-    report = find_report_by_period(db_session, "2026-10-01")
+    report = find_report_by_period(db_session, "2026-09-01")
     assert report is not None
     assert report.calculated_grand_total > 0
 

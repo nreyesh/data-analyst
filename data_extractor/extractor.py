@@ -71,7 +71,7 @@ def extract_from_pdf(
 
     user_message = (
         "Please extract all categorical line items from this building expense report. "
-        "Strictly adhere to the extraction rules, normalize the issue date to 01/MM/YYYY, "
+        "Strictly adhere to the extraction rules, normalize the billing period date to 01/MM/YYYY, "
         "extract clean base names, output values as integer CLP, and map 'Gas Cargo Comun al 30%' under 'Consumos'."
     )
 
