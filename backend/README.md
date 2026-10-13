@@ -110,6 +110,8 @@ Open your browser to:
 | `GET` | `/api/v1/reports/{id}` | Get full hierarchical report detail by UUIDv7 | `200 OK` / `404` |
 | `GET` | `/api/v1/reports/period/{period_date}` | Lookup full report by ISO period (e.g. `2026-10-01`) | `200 OK` / `404` |
 | `DELETE`| `/api/v1/reports/{id}` | Delete report (cascades and deletes sections and items) | `204 No Content` |
+| `POST` | `/api/v1/sync/pending` | Batch reconcile all files in pending queue into SQLite | `200 OK` |
+| `GET` | `/api/v1/sync/status` | Telemetry report of counts across pending, synced, and failed | `200 OK` |
 
 ---
 

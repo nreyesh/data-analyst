@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Literal
 
+import requests
 from langgraph.graph import StateGraph, START, END
 
 from data_extractor.config import get_settings
@@ -225,14 +227,85 @@ def run_workflow(
     if "_metadata" in output_data:
         output_data["_metadata"]["total_duration_seconds"] = total_time
 
-    # Determine save destination
-    if output_path is not None:
-        dest = Path(output_path)
-    else:
-        dest = settings.output_dir / f"{resolved_pdf.stem}.json"
+    # Ingest and route final output according to backend response
+    dest, spool_status = load_and_spool_report(
+        output_data=output_data,
+        stem=resolved_pdf.stem,
+        is_valid=final_state.get("is_valid", False),
+        explicit_output_path=output_path,
+    )
+
+    output_data["_destination_path"] = str(dest)
+    output_data["_spool_status"] = spool_status
+
+    return output_data
+
+
+def load_and_spool_report(
+    output_data: dict,
+    stem: str,
+    is_valid: bool,
+    explicit_output_path: str | Path | None = None,
+) -> tuple[Path, str]:
+    """Attempt direct backend load and determine final spool destination.
+
+    Returns:
+        tuple[Path, str]: (destination_path, spool_status: 'synced' | 'pending' | 'failed' | 'explicit')
+    """
+    settings = get_settings()
+    settings.ensure_directories()
+
+    # If caller requested an explicit path, save there directly
+    if explicit_output_path is not None:
+        dest = Path(explicit_output_path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with open(dest, "w", encoding="utf-8") as f:
+            json.dump(output_data, f, indent=2, ensure_ascii=False)
+        return dest, "explicit"
+
+    # If extraction failed cross-validation, route to failed spool
+    if not is_valid:
+        dest = settings.failed_dir / f"{stem}.json"
+        output_data["_sync"] = {"status": "FAILED_VALIDATION"}
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with open(dest, "w", encoding="utf-8") as f:
+            json.dump(output_data, f, indent=2, ensure_ascii=False)
+        return dest, "failed"
+
+    # Attempt immediate backend ingestion via HTTP POST
+    try:
+        resp = requests.post(
+            settings.backend_reports_url,
+            json=output_data,
+            timeout=5.0,
+        )
+        if resp.status_code in (200, 201):
+            dest = settings.synced_dir / f"{stem}.json"
+            spool_status = "synced"
+            body = resp.json()
+            output_data["_sync"] = {
+                "status": "SYNCED",
+                "report_id": body.get("id"),
+                "overwritten": body.get("overwritten", False),
+            }
+        else:
+            dest = settings.failed_dir / f"{stem}.json"
+            spool_status = "failed"
+            output_data["_sync"] = {
+                "status": "FAILED",
+                "status_code": resp.status_code,
+                "error": resp.text,
+            }
+    except Exception as exc:
+        dest = settings.pending_dir / f"{stem}.json"
+        spool_status = "pending"
+        output_data["_sync"] = {
+            "status": "PENDING",
+            "error": str(exc),
+        }
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     with open(dest, "w", encoding="utf-8") as f:
         json.dump(output_data, f, indent=2, ensure_ascii=False)
 
-    return output_data
+    return dest, spool_status

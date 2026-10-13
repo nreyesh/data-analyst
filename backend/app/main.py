@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from backend.app.config import get_settings
 from backend.app.database import init_db
 from backend.app.routes.reports import router as reports_router
+from backend.app.routes.sync import router as sync_router
 
 logger = logging.getLogger("backend.app")
 
@@ -20,6 +21,7 @@ logger = logging.getLogger("backend.app")
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Lifespan context manager for application startup and shutdown."""
     settings = get_settings()
+    settings.ensure_directories()
     logger.info(f"Starting backend service... Database: {settings.database_path}")
     # Initialize SQLite database and tables
     init_db()
@@ -58,6 +60,7 @@ def create_app() -> FastAPI:
 
     # Mount API routers
     app.include_router(reports_router, prefix="/api/v1")
+    app.include_router(sync_router, prefix="/api/v1")
 
     return app
 

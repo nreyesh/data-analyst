@@ -58,9 +58,54 @@ class Settings(BaseSettings):
         default_factory=lambda: Path(__file__).resolve().parent / "prompts"
     )
 
+    # 4. Backend Service URLs
+    backend_base_url: str = Field(
+        default="http://localhost:8000",
+        validation_alias="BACKEND_BASE_URL",
+        description="Base URL for the persistence backend service",
+    )
+
+    @property
+    def pending_dir(self) -> Path:
+        """Directory staging validated reports awaiting database sync."""
+        return self.output_dir / "pending"
+
+    @property
+    def synced_dir(self) -> Path:
+        """Directory archiving reports successfully committed to the database."""
+        return self.output_dir / "synced"
+
+    @property
+    def failed_dir(self) -> Path:
+        """Dead-letter directory isolating reports rejected by the backend."""
+        return self.output_dir / "failed"
+
+    @property
+    def backend_reports_url(self) -> str:
+        """Direct report ingestion endpoint URL."""
+        return f"{self.backend_base_url.rstrip('/')}/api/v1/reports"
+
+    @property
+    def backend_sync_url(self) -> str:
+        """Batch queue reconciliation endpoint URL."""
+        return f"{self.backend_base_url.rstrip('/')}/api/v1/sync/pending"
+
+    @property
+    def backend_status_url(self) -> str:
+        """Queue status telemetry endpoint URL."""
+        return f"{self.backend_base_url.rstrip('/')}/api/v1/sync/status"
+
     def ensure_directories(self) -> None:
-        """Create standard data and storage directories if they do not exist."""
-        for path in (self.input_dir, self.output_dir, self.storage_dir, self.prompts_dir):
+        """Create standard data, storage, and spool directories if they do not exist."""
+        for path in (
+            self.input_dir,
+            self.output_dir,
+            self.storage_dir,
+            self.prompts_dir,
+            self.pending_dir,
+            self.synced_dir,
+            self.failed_dir,
+        ):
             path.mkdir(parents=True, exist_ok=True)
 
 

@@ -29,9 +29,27 @@ class Settings(BaseSettings):
     storage_dir: Path = Field(
         default_factory=lambda: Path(__file__).resolve().parent.parent.parent / "data" / "storage"
     )
+    output_dir: Path = Field(
+        default_factory=lambda: Path(__file__).resolve().parent.parent.parent / "data" / "output"
+    )
     database_filename: str = Field(
         default="expenses.db", validation_alias="DATABASE_FILENAME"
     )
+
+    @property
+    def pending_dir(self) -> Path:
+        """Directory staging validated reports awaiting database sync."""
+        return self.output_dir / "pending"
+
+    @property
+    def synced_dir(self) -> Path:
+        """Directory archiving reports successfully committed to the database."""
+        return self.output_dir / "synced"
+
+    @property
+    def failed_dir(self) -> Path:
+        """Dead-letter directory isolating reports rejected by the backend."""
+        return self.output_dir / "failed"
 
     @property
     def database_path(self) -> Path:
@@ -42,6 +60,11 @@ class Settings(BaseSettings):
     def database_url(self) -> str:
         """SQLAlchemy SQLite database connection URL."""
         return f"sqlite:///{self.database_path.resolve()}"
+
+    def ensure_directories(self) -> None:
+        """Ensure storage and spool directories exist."""
+        for path in (self.storage_dir, self.output_dir, self.pending_dir, self.synced_dir, self.failed_dir):
+            path.mkdir(parents=True, exist_ok=True)
 
 
 @lru_cache(maxsize=1)
