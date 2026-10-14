@@ -1,0 +1,21 @@
+# Core Web & Persistence (Phase 2)
+fastapi==0.115.0
+uvicorn[standard]==0.34.0
+sqlalchemy==2.0.38
+uuid-utils==0.17.1
+
+# Domain Models & Settings
+pydantic==2.9.2
+pydantic-settings==2.7.1
+python-dotenv==1.0.1
+
+# PDF Extractor & AI Pipeline (Phase 1)
+google-genai==1.14.0
+langgraph==1.2.14
+PyMuPDF==1.25.5
+requests==2.32.3
+
+# Testing & Verification
+httpx==0.28.1
+pytest==8.2.2
+pytest-cov==5.0.0

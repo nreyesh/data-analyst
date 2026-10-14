@@ -37,7 +37,28 @@ This repository currently implements **Phase 1** and **Phase 2** of the project 
 - SQLite 3.35+
 - Google Gemini API Key
 
-### 2. Configure Environment (`.env`)
+### 2. Virtual Environment & Dependencies Setup
+Create an isolated Python virtual environment and install the pinned dependencies:
+
+```bash
+# Create virtual environment
+python3 -m venv .venv
+
+# Activate virtual environment
+source .venv/bin/activate       # On Linux / macOS
+# .venv\Scripts\activate        # On Windows
+
+# Upgrade pip and install exact pinned dependencies
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+Verify the environment installation:
+```bash
+pytest
+```
+
+### 3. Configure Environment (`.env`)
 Create or edit `.env` in the repository root:
 ```dotenv
 # Required for Phase 1 Extractor
