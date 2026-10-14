@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from google import genai
 from google.genai import types
+from langsmith import traceable
 
 from data_extractor.config import get_settings
 from data_extractor.models import ExpenseReport, ExtractionMetadata
@@ -28,6 +29,7 @@ def get_gemini_client() -> genai.Client:
     return genai.Client(api_key=api_key)
 
 
+@traceable(run_type="llm", name="gemini_extract_from_pdf")
 def extract_from_pdf(
     pdf_source: str | Path | bytes,
     client: genai.Client | None = None,

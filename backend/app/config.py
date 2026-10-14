@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from dotenv import load_dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Export .env variables to os.environ
+load_dotenv()
 
 
 class Settings(BaseSettings):

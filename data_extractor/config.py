@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from dotenv import load_dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Export .env variables to os.environ for LangSmith / LangGraph tracing
+load_dotenv()
 
 
 class Settings(BaseSettings):
