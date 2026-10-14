@@ -92,15 +92,30 @@ def extract_ground_truth(
         result.grand_total = sign * int(m_grand.group(3).replace(".", ""))
 
     # 2. Extract Section Subtotals by text block ordering
+    cat_patterns = [
+        re.escape(c) + r"\s*$" for c in KNOWN_CATEGORIES if c != "Gas Cargo Comun al 30%"
+    ]
+    cat_patterns.append(r"Gas Cargo Comun al 30%(?:\s*\(.*?\))?\s*$")
+    pattern = re.compile(r"^(?:" + "|".join(cat_patterns) + r")", re.MULTILINE)
+
+    pos_end = full_text.find("TOTAL GASTOS COMUNES")
+    effective_end = pos_end if pos_end != -1 else len(full_text)
+
     positions: list[tuple[int, str]] = []
-    for cat in KNOWN_CATEGORIES:
-        pos = full_text.find(cat)
-        if pos != -1:
-            positions.append((pos, cat))
+    for m in pattern.finditer(full_text):
+        if m.start() >= effective_end:
+            continue
+        line = m.group().strip()
+        matched_cat = None
+        for cat in KNOWN_CATEGORIES:
+            if line.startswith(cat):
+                matched_cat = cat
+                break
+        if matched_cat:
+            positions.append((m.start(), matched_cat))
 
     positions.sort(key=lambda x: x[0])
 
-    pos_end = full_text.find("TOTAL GASTOS COMUNES")
     if pos_end != -1:
         positions.append((pos_end, "TOTAL GASTOS COMUNES"))
     else:
@@ -116,8 +131,9 @@ def extract_ground_truth(
             sign = -1 if (m.group(1) == "-" or m.group(2) == "-") else 1
             amounts.append(sign * int(m.group(3).replace(".", "")))
         if amounts:
-            # The declared section subtotal is the last amount printed in that section
-            raw_subtotals[cat] = amounts[-1]
+            # The declared section subtotal is the last amount printed in that section.
+            # Accumulate subtotals for repeated categories (e.g. employee loans).
+            raw_subtotals[cat] = raw_subtotals.get(cat, 0) + amounts[-1]
 
     result.raw_section_totals = dict(raw_subtotals)
 

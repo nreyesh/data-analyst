@@ -166,3 +166,59 @@ def test_ground_truth_period_across_samples(pdf_name: str, expected_period: str)
     assert path.exists(), f"Sample PDF not found: {path}"
     gt = extract_ground_truth(path)
     assert gt.period_date == expected_period
+
+
+def test_ground_truth_multi_block_repeated_category():
+    """Verify that deterministic ground truth accumulates subtotals for repeated categories (e.g. 2025-11 and 2025-01)."""
+    base_examples = Path(__file__).parent.parent / "examples"
+
+    # 2025-11.pdf has payroll ($17,881,388) and staff loan ($0)
+    pdf_11 = base_examples / "2025-11.pdf"
+    assert pdf_11.exists(), f"Sample PDF not found: {pdf_11}"
+    gt_11 = extract_ground_truth(pdf_11)
+    assert gt_11.period_date == "01/11/2025"
+    assert gt_11.grand_total == 57032259
+    assert gt_11.section_totals["Remuneraciones"] == 17881388
+    assert sum(gt_11.section_totals.values()) == gt_11.grand_total
+
+    # 2025-01.pdf has payroll ($14,336,664) and staff loan ($120,000)
+    pdf_01 = base_examples / "2025-01.pdf"
+    assert pdf_01.exists(), f"Sample PDF not found: {pdf_01}"
+    gt_01 = extract_ground_truth(pdf_01)
+    assert gt_01.period_date == "01/01/2025"
+    assert gt_01.grand_total == 48439988
+    assert gt_01.section_totals["Remuneraciones"] == 14456664
+    assert sum(gt_01.section_totals.values()) == gt_01.grand_total
+
+
+def test_expense_report_consolidates_duplicate_sections():
+    """Verify that ExpenseReport automatically consolidates duplicate section categories."""
+    report = ExpenseReport(
+        issue_date="01/11/2025",
+        sections=[
+            Section(
+                general_topic="Remuneraciones",
+                sub_topics=[
+                    SubTopic(name="Sueldos", value=11886123),
+                    SubTopic(name="Aguinaldo", value=520240),
+                ],
+            ),
+            Section(
+                general_topic="Consumos",
+                sub_topics=[SubTopic(name="Agua Potable", value=3611044)],
+            ),
+            Section(
+                general_topic="Remuneraciones",
+                sub_topics=[SubTopic(name="Préstamos", value=120000)],
+            ),
+        ],
+    )
+
+    # Should consolidate into 2 sections: Remuneraciones and Consumos
+    assert len(report.sections) == 2
+    remun_sec = next(s for s in report.sections if s.general_topic == "Remuneraciones")
+    assert len(remun_sec.sub_topics) == 3
+    assert [it.name for it in remun_sec.sub_topics] == ["Sueldos", "Aguinaldo", "Préstamos"]
+    assert sum(it.value for it in remun_sec.sub_topics) == 11886123 + 520240 + 120000
+
+

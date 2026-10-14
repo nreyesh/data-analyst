@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from typing import TypedDict
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class SubTopic(BaseModel):
@@ -49,6 +49,22 @@ class ExpenseReport(BaseModel):
                 f"issue_date must be strictly in '01/MM/YYYY' format, received: {v!r}"
             )
         return v
+
+    @model_validator(mode="after")
+    def consolidate_duplicate_sections(self) -> ExpenseReport:
+        """Consolidate multiple sections sharing identical general_topic into a single unified section."""
+        consolidated: dict[str, Section] = {}
+        for sec in self.sections:
+            topic = sec.general_topic.strip()
+            if topic in consolidated:
+                consolidated[topic].sub_topics.extend(sec.sub_topics)
+            else:
+                consolidated[topic] = Section(
+                    general_topic=topic,
+                    sub_topics=list(sec.sub_topics),
+                )
+        self.sections = list(consolidated.values())
+        return self
 
 
 class SectionValidation(BaseModel):

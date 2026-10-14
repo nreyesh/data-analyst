@@ -27,3 +27,7 @@ Extraction Rules:
 
 7. No Citations:
    - Do not include, generate, or transcribe any citation brackets (such as [cite: 1]) in your output.
+
+8. Section Consolidation:
+   - If a category header appears more than once in the document (such as an additional "Remuneraciones" section for employee loans / "Préstamos"), consolidate all line items under a single unified section for that category.
+

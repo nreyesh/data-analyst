@@ -212,7 +212,7 @@ def build_extraction_graph() -> StateGraph:
     workflow.add_edge("self_heal", "validate_extraction")
     workflow.add_edge("format_output", END)
 
-    return workflow.compile()
+    return workflow.compile(name="ExpenseReportExtractor")
 
 
 def run_workflow(
@@ -256,10 +256,17 @@ def run_workflow(
         "is_valid": False,
         "final_output": None,
     }
-
     graph = build_extraction_graph()
-    final_state = graph.invoke(initial_state)
-
+    final_state = graph.invoke(
+        initial_state,
+        config={
+            "run_name": f"Extract: {resolved_pdf.name}",
+            "tags": ["pdf-extractor"],
+            "metadata": {
+                "file_name": resolved_pdf.name,
+            },
+        },
+    )
     total_time = round(time.perf_counter() - start_workflow_time, 2)
     output_data = final_state.get("final_output", {})
 
