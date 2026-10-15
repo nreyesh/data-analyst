@@ -237,12 +237,11 @@ analytics/
 ├── prompt_loader.py       # Prompt templates & YAML Data Dictionary loader
 ├── workflow.py            # LangGraph StateGraph assembly and run_analysis()
 ├── cli.py                 # Terminal CLI interface
-└── prompts/
-    ├── data_dictionary.yaml   # 3-table schema, sample values & business rules
-    ├── planner_system.txt     # System prompt for IntentPlan & Scope Guard
-    ├── sql_coder_system.txt   # System prompt for SQL generation
-    ├── visualizer_system.txt  # System prompt for Matplotlib generation
-    └── synthesizer_system.txt # System prompt for final markdown response & Zero Schema policy
+    ├── data_dictionary.md     # 3-table schema, sample values & business 
+    ├── planner_system.md      # System prompt for IntentPlan & Scope Guard
+    ├── sql_coder_system.md    # System prompt for SQL generation
+    ├── visualizer_system.md   # System prompt for Matplotlib generation
+    └── synthesizer_system.md  # System prompt for final markdown response & Zero Schema policy
 
 backend/app/routes/
 ├── analytics.py           # Exposes /execute-query (Gateway Proxy) and /query (Consumer)

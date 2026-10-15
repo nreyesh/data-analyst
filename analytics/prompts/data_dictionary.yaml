@@ -1,0 +1,147 @@
+version: "1.0"
+database_type: "sqlite"
+currency: "CLP (Chilean Pesos)"
+currency_rules:
+  - "All amounts are signed integers representing Chilean Pesos (CLP)."
+  - "Never use decimals or cents for CLP values."
+  - "Negative numbers in expense_items.amount represent credit notes, discounts, or refunds."
+
+date_rules:
+  - "Billing periods are normalized to the first day of each month: 'YYYY-MM-01' (e.g., '2025-07-01')."
+  - "For filtering by year or month, use period_year (integer) and period_month (1-12)."
+  - "Chronological ordering should always use 'ORDER BY r.period_date ASC' or 'ORDER BY r.period_year ASC, r.period_month ASC'."
+
+tables:
+  expense_reports:
+    description: "Header table containing monthly building expense summaries."
+    columns:
+      id:
+        type: "VARCHAR(36)"
+        primary_key: true
+        description: "UUIDv7 unique identifier for the monthly report."
+      period_date:
+        type: "VARCHAR(10)"
+        unique: true
+        indexed: true
+        description: "Billing period date in strict 'YYYY-MM-01' format (e.g. '2026-09-01')."
+      period_year:
+        type: "INTEGER"
+        indexed: true
+        description: "Year of the expense period (e.g. 2025, 2026)."
+      period_month:
+        type: "INTEGER"
+        indexed: true
+        description: "Month of the expense period (1 to 12)."
+      calculated_grand_total:
+        type: "INTEGER"
+        description: "Total monthly building expense in Chilean Pesos (CLP)."
+      created_at:
+        type: "VARCHAR(32)"
+        description: "ISO 8601 creation timestamp."
+
+  expense_sections:
+    description: "Categorical sections grouping related expense line items for a report."
+    columns:
+      id:
+        type: "VARCHAR(36)"
+        primary_key: true
+        description: "UUIDv7 unique identifier for the section."
+      report_id:
+        type: "VARCHAR(36)"
+        foreign_key: "expense_reports.id"
+        description: "Reference to parent expense report."
+      category_name:
+        type: "VARCHAR"
+        description: "Normalized category name in lowercase (e.g. 'mantenciones y servicios', 'consumos', 'remuneraciones', 'reparaciones y repuestos', 'seguros', 'insumos', 'otros gastos', 'asesorias y honorarios profesionales')."
+      calculated_subtotal:
+        type: "INTEGER"
+        description: "Subtotal in Chilean Pesos (CLP) for this categorical section."
+      display_order:
+        type: "INTEGER"
+        description: "Sequential presentation order in original statement."
+
+  expense_items:
+    description: "Individual invoice line items or detailed charges within a section."
+    columns:
+      id:
+        type: "VARCHAR(36)"
+        primary_key: true
+        description: "UUIDv7 unique identifier for the item."
+      section_id:
+        type: "VARCHAR(36)"
+        foreign_key: "expense_sections.id"
+        description: "Reference to parent expense section."
+      name:
+        type: "VARCHAR"
+        description: "Original line item name / vendor invoice description."
+      normalized_name:
+        type: "VARCHAR"
+        indexed: true
+        description: "Normalized lowercase description without accents (preserving 'ñ') for fuzzy searching."
+      amount:
+        type: "INTEGER"
+        description: "Item cost in Chilean Pesos (CLP). Negative values indicate credit notes or discounts."
+      display_order:
+        type: "INTEGER"
+        description: "Sequential display order within the section."
+
+canonical_categories:
+  - "mantenciones y servicios"
+  - "consumos"
+  - "remuneraciones"
+  - "reparaciones y repuestos"
+  - "seguros"
+  - "insumos"
+  - "otros gastos"
+  - "asesorias y honorarios profesionales"
+
+sample_queries:
+  total_evolution:
+    description: "Query monthly total expenses evolution for a given year."
+    sql: |
+      SELECT 
+          period_date,
+          period_month,
+          calculated_grand_total AS total_clp
+      FROM expense_reports
+      WHERE period_year = 2025
+      ORDER BY period_month ASC;
+
+  category_trend:
+    description: "Track monthly evolution of a specific category like maintenance."
+    sql: |
+      SELECT 
+          r.period_date,
+          s.calculated_subtotal AS subtotal_clp
+      FROM expense_sections s
+      JOIN expense_reports r ON s.report_id = r.id
+      WHERE LOWER(s.category_name) LIKE '%mantencion%'
+        AND r.period_date BETWEEN '2025-07-01' AND '2025-12-01'
+      ORDER BY r.period_date ASC;
+
+  category_comparison:
+    description: "Compare total spending by category between two years."
+    sql: |
+      SELECT 
+          s.category_name,
+          r.period_year,
+          SUM(s.calculated_subtotal) AS annual_subtotal_clp
+      FROM expense_sections s
+      JOIN expense_reports r ON s.report_id = r.id
+      WHERE r.period_year IN (2025, 2026)
+      GROUP BY s.category_name, r.period_year
+      ORDER BY s.category_name, r.period_year;
+
+  top_items:
+    description: "Find the highest invoice charges in a specific period."
+    sql: |
+      SELECT 
+          i.name AS item_name,
+          s.category_name,
+          i.amount AS item_amount_clp
+      FROM expense_items i
+      JOIN expense_sections s ON i.section_id = s.id
+      JOIN expense_reports r ON s.report_id = r.id
+      WHERE r.period_date = '2026-09-01'
+      ORDER BY i.amount DESC
+      LIMIT 10;

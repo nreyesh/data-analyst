@@ -20,3 +20,8 @@ uuid-utils==0.17.1
 httpx==0.28.1
 pytest==8.2.2
 pytest-cov==5.0.0
+
+# Analytics & Plotting (Phase 3)
+matplotlib>=3.8.0
+pyyaml>=6.0.0
+
