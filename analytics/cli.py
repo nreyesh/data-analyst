@@ -47,6 +47,22 @@ def main(argv: list[str] | None = None) -> int:
             max_retries=args.max_retries,
         )
 
+        # Interactive clarification loop if paused and not in raw JSON output mode
+        if result.needs_clarification and not args.json:
+            print(f"\n🔍 Aclaración requerida:\n{result.clarification_prompt}\n")
+            for idx, option in enumerate(result.candidate_options, start=1):
+                print(f"  [{idx}] {option}")
+
+            user_input = input("\nSelecciona una opción (número) o escribe tu aclaración: ").strip()
+            if user_input:
+                result = run_analysis(
+                    query=args.query,
+                    chart_dir=args.chart_dir,
+                    max_retries=args.max_retries,
+                    thread_id=result.thread_id,
+                    resume_choice=user_input,
+                )
+
         if args.json:
             print(result.model_dump_json(indent=2))
             return 0

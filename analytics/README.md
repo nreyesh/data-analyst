@@ -27,12 +27,17 @@ Run queries directly from the command line:
 ```bash
 # General trend query with chart
 python -m analytics.cli "Muestra la evolución del gasto total mensual en 2025. Incluye un gráfico."
+python -m analytics.cli "Muestrame como ha evolucionado el gasto comun historicamente"
 
 # Category breakdown comparison
 python -m analytics.cli "Compara el gasto de Mantenciones y Servicios entre 2025 y 2026"
 
 # Output structured JSON instead of markdown
 python -m analytics.cli "Resumen de gastos enero 2026" --json
+
+# Specific and drilling question about the reason of why expences are going up
+python -m analytics.cli "Como ha sido la evolucion del gasto comun durante el 2026?.A que se debe el aumento del gasto?"
+python -m analytics.cli "A que se debe el aumento del gasto en el 2026?"
 ```
 
 Charts are automatically saved to `data/output/charts/chart_<id>.png`.

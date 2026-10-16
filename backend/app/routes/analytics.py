@@ -252,6 +252,8 @@ class AnalyticsQueryRequest(BaseModel):
     query: str = Field(..., min_length=1, description="Natural language question")
     include_chart: bool = Field(default=True, description="Whether to generate an analytical chart")
     max_retries: int = Field(default=2, ge=0, le=5, description="Maximum self-healing retries")
+    thread_id: str | None = Field(default=None, description="Optional thread ID for resuming paused clarification")
+    resume_choice: str | None = Field(default=None, description="Optional user clarification choice when resuming")
 
 
 class AnalyticsQueryResponse(BaseModel):
@@ -259,6 +261,18 @@ class AnalyticsQueryResponse(BaseModel):
 
     summary: str = Field(..., description="Executive markdown answer")
     is_authorized: bool = Field(default=True, description="False if query violated scope guard")
+    needs_clarification: bool = Field(
+        default=False, description="True if workflow paused awaiting user clarification"
+    )
+    clarification_prompt: str | None = Field(
+        default=None, description="Clarification prompt when needs_clarification is True"
+    )
+    candidate_options: list[str] = Field(
+        default_factory=list, description="Selectable options when needs_clarification is True"
+    )
+    thread_id: str | None = Field(
+        default=None, description="Session thread ID for resuming paused execution"
+    )
     sql_query: str | None = Field(default=None, description="Executed SQL query")
     data: list[dict[str, Any]] | None = Field(default=None, description="Fetched database records")
     chart_file_path: str | None = Field(default=None, description="Path to generated chart PNG")
@@ -271,20 +285,32 @@ class AnalyticsQueryResponse(BaseModel):
     response_model=AnalyticsQueryResponse,
     status_code=status.HTTP_200_OK,
     summary="Run high-level natural language analytics query",
-    description="Executes the full LangGraph analytics state machine and returns markdown answer, data, and chart link.",
+    description="Executes the full LangGraph analytics state machine and returns markdown answer, data, chart link, or clarification options.",
 )
 def run_analytics_query_endpoint(payload: AnalyticsQueryRequest) -> AnalyticsQueryResponse:
     """Execute end-to-end natural language analytics query."""
     from analytics.workflow import run_analysis
 
     try:
-        result = run_analysis(
-            query=payload.query,
-            max_retries=payload.max_retries,
-        )
+        if payload.thread_id is not None or payload.resume_choice is not None:
+            result = run_analysis(
+                query=payload.query,
+                max_retries=payload.max_retries,
+                thread_id=payload.thread_id,
+                resume_choice=payload.resume_choice,
+            )
+        else:
+            result = run_analysis(
+                query=payload.query,
+                max_retries=payload.max_retries,
+            )
         return AnalyticsQueryResponse(
             summary=result.summary,
             is_authorized=result.is_authorized,
+            needs_clarification=result.needs_clarification,
+            clarification_prompt=result.clarification_prompt,
+            candidate_options=result.candidate_options,
+            thread_id=result.thread_id,
             sql_query=result.sql_query,
             data=result.data,
             chart_file_path=result.chart_file_path,
@@ -297,4 +323,5 @@ def run_analytics_query_endpoint(payload: AnalyticsQueryRequest) -> AnalyticsQue
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Analytics workflow execution failed: {exc}",
         ) from exc
+
 

@@ -37,11 +37,24 @@ Do NOT call `plt.show()`.
 
 ### Security & Isolation
 * Do NOT import `sqlite3`, `sqlalchemy`, `requests`, `socket`, or `os`.
-* Only import standard library modules (`json`, `math`) and `matplotlib.pyplot`.
+* Only import standard library modules (`json`, `math`, `collections`) and `matplotlib.pyplot`.
 
 ---
 
-## 2. Self-Healing Recovery
+## 2. Archetype-Specific Visualization Recipes
+
+1. **`variance_driver` with `delta_clp` columns**:
+   * Render a **Net Change ($\Delta$) Contribution Horizontal Bar Chart** showing `delta_clp / 1_000_000` per category (sorted from highest positive growth to lowest/negative), coloring positive increases in coral/red (`#e74c3c`) or blue (`#2980b9`) and decreases in green (`#27ae60`), with explicit `+$X.XXM` labels.
+   * Alternatively, if `period_date` time-series data is present alongside categories, render a **Dual-Panel Figure** (`fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))`):
+     * Top panel (`ax1`): Monthly total trajectory line chart.
+     * Bottom panel (`ax2`): Multi-line progression or comparative bar breakdown of categories.
+
+2. **`time_series_trend`**:
+   * Render a chronological line plot with markers (`marker='o'`) and data labels on key peaks and troughs.
+
+---
+
+## 3. Self-Healing Recovery
 
 If a previous script execution failed, you will receive:
 `ATTENTION - PREVIOUS VISUALIZATION ERROR DETECTED: <stderr>`

@@ -72,6 +72,8 @@ data/
 examples/
 openspec/
 .agent/
+data_posts/
+data_post/
 
 # Backups and temporary files
 * copy.md
