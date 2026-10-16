@@ -32,10 +32,7 @@ def test_primary_model_success_telemetry(monkeypatch):
     mock_client.models.generate_content.return_value = mock_response
 
     # Force known test settings
-    test_settings = Settings(
-        default_model="gemini-3.5-flash-lite",
-        fallback_model="gemini-3.1-flash-lite",
-    )
+    test_settings = Settings(default_model="gemini-3.5-flash-lite")
     monkeypatch.setattr("data_extractor.extractor.get_settings", lambda: test_settings)
 
     report, metadata = extract_from_pdf(
@@ -63,10 +60,7 @@ def test_fallback_activated_on_primary_error(monkeypatch):
         mock_success_response,
     ]
 
-    test_settings = Settings(
-        default_model="gemini-3.5-flash-lite",
-        fallback_model="gemini-3.1-flash-lite",
-    )
+    test_settings = Settings(default_model="gemini-3.5-flash-lite")
     monkeypatch.setattr("data_extractor.extractor.get_settings", lambda: test_settings)
 
     report, metadata = extract_from_pdf(
@@ -85,15 +79,11 @@ def test_fallback_activated_on_primary_error(monkeypatch):
 def test_all_models_failing_raises_runtime_error(monkeypatch):
     """Test exception propagation when all candidate models fail."""
     mock_client = MagicMock()
-    mock_client.models.generate_content.side_effect = [
-        ServerError(503, {"message": "Primary 503"}),
-        ServerError(500, {"message": "Fallback 500"}),
-    ]
-
-    test_settings = Settings(
-        default_model="gemini-3.5-flash-lite",
-        fallback_model="gemini-3.1-flash-lite",
+    mock_client.models.generate_content.side_effect = ServerError(
+        503, {"message": "Service Unavailable"}
     )
+
+    test_settings = Settings(default_model="gemini-3.5-flash-lite")
     monkeypatch.setattr("data_extractor.extractor.get_settings", lambda: test_settings)
 
     with pytest.raises(RuntimeError) as exc_info:
@@ -103,7 +93,55 @@ def test_all_models_failing_raises_runtime_error(monkeypatch):
         )
 
     assert "All configured extraction models failed" in str(exc_info.value)
-    assert mock_client.models.generate_content.call_count == 2
+    assert mock_client.models.generate_content.call_count == 5
+    called_models = [
+        call.kwargs["model"] for call in mock_client.models.generate_content.call_args_list
+    ]
+    assert called_models == [
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
+        "gemini-3.6-flash",
+        "gemini-3.7-flash",
+        "gemini-3.8-flash",
+    ]
+
+
+def test_analytics_multi_model_fallback_cascade(monkeypatch):
+    """Test analytics generate_content_with_fallback cascading to gemini-3.6-flash on 503 errors."""
+    from analytics.config import AnalyticsSettings
+    from analytics.nodes import generate_content_with_fallback
+    from google.genai import types
+
+    mock_client = MagicMock()
+    mock_success_response = MagicMock()
+    mock_success_response.text = '{"ok": true}'
+
+    # First two models (3.5-flash-lite and 3.1-flash-lite) fail with 503, third (3.6-flash) succeeds
+    mock_client.models.generate_content.side_effect = [
+        ServerError(503, {"message": "3.5-flash-lite 503"}),
+        ServerError(503, {"message": "3.1-flash-lite 503"}),
+        mock_success_response,
+    ]
+
+    test_settings = AnalyticsSettings(default_model="gemini-3.5-flash-lite")
+    monkeypatch.setattr("analytics.nodes.get_analytics_settings", lambda: test_settings)
+
+    response = generate_content_with_fallback(
+        client=mock_client,
+        contents=["test prompt"],
+        config=types.GenerateContentConfig(temperature=0.0),
+    )
+
+    assert response.text == '{"ok": true}'
+    assert mock_client.models.generate_content.call_count == 3
+    called_models = [
+        call.kwargs["model"] for call in mock_client.models.generate_content.call_args_list
+    ]
+    assert called_models == [
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
+        "gemini-3.6-flash",
+    ]
 
 
 def test_format_output_node_attaches_metadata():

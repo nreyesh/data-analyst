@@ -52,9 +52,7 @@ def extract_from_pdf(
         client = get_gemini_client()
 
     primary_model = model or settings.default_model
-    candidate_models = [primary_model]
-    if settings.fallback_model and settings.fallback_model != primary_model:
-        candidate_models.append(settings.fallback_model)
+    candidate_models = settings.get_candidate_models(primary_override=primary_model)
 
     # 1. Load PDF bytes
     if isinstance(pdf_source, (str, Path)):

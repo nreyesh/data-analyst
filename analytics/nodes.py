@@ -37,6 +37,43 @@ def get_gemini_client() -> genai.Client:
     return genai.Client(api_key=api_key)
 
 
+def generate_content_with_fallback(
+    client: genai.Client,
+    contents: list[Any],
+    config: types.GenerateContentConfig,
+) -> Any:
+    """Execute Gemini generate_content across primary and fallback models."""
+    settings = get_analytics_settings()
+    candidate_models = settings.get_candidate_models()
+    last_error: Exception | None = None
+
+    for idx, current_model in enumerate(candidate_models):
+        if idx > 0:
+            logger.warning(
+                "Model '%s' failed (%s). Activating fallback model '%s'...",
+                candidate_models[idx - 1],
+                last_error,
+                current_model,
+            )
+        try:
+            response = client.models.generate_content(
+                model=current_model,
+                contents=contents,
+                config=config,
+            )
+            if not response.text:
+                raise RuntimeError(f"Model '{current_model}' returned empty response.")
+            return response
+        except Exception as exc:
+            last_error = exc
+            logger.warning("Attempt with model '%s' failed: %s", current_model, exc)
+
+    raise RuntimeError(
+        f"All configured analytics models failed. Attempted models: {candidate_models}. "
+        f"Last error: {last_error}"
+    ) from last_error
+
+
 class SQLCoderOutput(BaseModel):
     """Structured output schema for SQL generation."""
 
@@ -58,7 +95,6 @@ class VisualizerOutput(BaseModel):
 
 def planner_node(state: DataAnalystState, client: genai.Client | None = None) -> dict[str, Any]:
     """Analyze user prompt, evaluate scope guard, and produce an IntentPlan."""
-    settings = get_analytics_settings()
     gemini_client = client or get_gemini_client()
     system_instruction = load_prompt_template("planner_system.md")
 
@@ -76,14 +112,11 @@ def planner_node(state: DataAnalystState, client: genai.Client | None = None) ->
 
     contents = [query_context]
 
-    response = gemini_client.models.generate_content(
-        model=settings.default_model,
+    response = generate_content_with_fallback(
+        client=gemini_client,
         contents=contents,
         config=config,
     )
-
-    if not response.text:
-        raise RuntimeError("Planner model returned empty response.")
 
     plan = IntentPlan.model_validate_json(response.text)
 
@@ -156,7 +189,6 @@ def trajectory_evaluator_node(
     state: DataAnalystState, client: genai.Client | None = None
 ) -> dict[str, Any]:
     """Evaluate macro trajectory against user's premise, isolate inflection points, or trigger clarification."""
-    settings = get_analytics_settings()
     gemini_client = client or get_gemini_client()
     system_instruction = load_prompt_template("evaluator_system.md")
 
@@ -179,14 +211,11 @@ def trajectory_evaluator_node(
         f"Verified Macro Monthly Totals (expense_reports):\n{json.dumps(trajectory, ensure_ascii=False, indent=2)}"
     ]
 
-    response = gemini_client.models.generate_content(
-        model=settings.default_model,
+    response = generate_content_with_fallback(
+        client=gemini_client,
         contents=contents,
         config=config,
     )
-
-    if not response.text:
-        raise RuntimeError("Trajectory evaluator model returned empty response.")
 
     evaluation = TrajectoryEvaluation.model_validate_json(response.text)
 
@@ -264,7 +293,6 @@ def clarification_node(state: DataAnalystState) -> dict[str, Any]:
 
 def sql_coder_node(state: DataAnalystState, client: genai.Client | None = None) -> dict[str, Any]:
     """Generate or correct SQLite SELECT query using IntentPlan, TrajectoryEvaluation, and Data Dictionary."""
-    settings = get_analytics_settings()
     gemini_client = client or get_gemini_client()
     system_instruction = load_prompt_template("sql_coder_system.md")
     data_dict_yaml = load_data_dictionary_str()
@@ -318,14 +346,11 @@ def sql_coder_node(state: DataAnalystState, client: genai.Client | None = None) 
             "Please fix the SQL syntax or column name."
         )
 
-    response = gemini_client.models.generate_content(
-        model=settings.default_model,
+    response = generate_content_with_fallback(
+        client=gemini_client,
         contents=contents,
         config=config,
     )
-
-    if not response.text:
-        raise RuntimeError("SQL Coder model returned empty response.")
 
     output = SQLCoderOutput.model_validate_json(response.text)
     logger.info("SQL Coder generated query: %s", output.sql_query)
@@ -373,7 +398,6 @@ def sql_gateway_node(state: DataAnalystState) -> dict[str, Any]:
 
 def visualizer_node(state: DataAnalystState, client: genai.Client | None = None) -> dict[str, Any]:
     """Generate standalone Matplotlib script reading from dataset.json."""
-    settings = get_analytics_settings()
     gemini_client = client or get_gemini_client()
     system_instruction = load_prompt_template("visualizer_system.md")
 
@@ -414,14 +438,11 @@ def visualizer_node(state: DataAnalystState, client: genai.Client | None = None)
             "Please fix the Python script so that it runs without error and saves 'output.png'."
         )
 
-    response = gemini_client.models.generate_content(
-        model=settings.default_model,
+    response = generate_content_with_fallback(
+        client=gemini_client,
         contents=contents,
         config=config,
     )
-
-    if not response.text:
-        raise RuntimeError("Visualizer model returned empty response.")
 
     output = VisualizerOutput.model_validate_json(response.text)
     logger.info("Visualizer generated script: length=%d", len(output.python_code))
@@ -489,7 +510,6 @@ def synthesizer_node(state: DataAnalystState, client: genai.Client | None = None
             "final_markdown": refusal_text,
         }
 
-    settings = get_analytics_settings()
     gemini_client = client or get_gemini_client()
     system_instruction = load_prompt_template("synthesizer_system.md")
 
@@ -524,8 +544,8 @@ def synthesizer_node(state: DataAnalystState, client: genai.Client | None = None
         f"Chart Image File Path: {chart_path or 'No chart generated'}"
     ]
 
-    response = gemini_client.models.generate_content(
-        model=settings.default_model,
+    response = generate_content_with_fallback(
+        client=gemini_client,
         contents=contents,
         config=config,
     )

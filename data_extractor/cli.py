@@ -150,7 +150,7 @@ def main() -> None:
 
     print(f"📄 Processing: {input_pdf.name}")
     print(f"⚙️  Primary model: {settings.default_model}")
-    print(f"🔄 Fallback model: {settings.fallback_model}")
+    print(f"🔄 Fallback models: {', '.join(settings.fallback_models)}")
 
     try:
         result = run_workflow(

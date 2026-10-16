@@ -34,16 +34,30 @@ class Settings(BaseSettings):
         validation_alias="DEFAULT_MODEL",
         description="Default Gemini multimodal model name",
     )
-    fallback_model: str = Field(
-        default="gemini-3.1-flash-lite",
-        validation_alias="FALLBACK_MODEL",
-        description="Secondary fallback Gemini multimodal model name",
+    fallback_models: list[str] = Field(
+        default_factory=lambda: [
+            "gemini-3.1-flash-lite",
+            "gemini-3.6-flash",
+            "gemini-3.7-flash",
+            "gemini-3.8-flash",
+        ],
+        validation_alias="FALLBACK_MODELS",
+        description="Ordered list of backup Gemini 3.1+ Flash models",
     )
     max_retries: int = Field(
         default=2,
         validation_alias="MAX_RETRIES",
         description="Maximum self-healing retry iterations",
     )
+
+    def get_candidate_models(self, primary_override: str | None = None) -> list[str]:
+        """Return deduplicated ordered list of primary and fallback models."""
+        primary = primary_override or self.default_model
+        candidates: list[str] = []
+        for model_name in [primary, *self.fallback_models]:
+            if model_name and model_name not in candidates:
+                candidates.append(model_name)
+        return candidates
 
     # 3. Path & Storage Boundaries
     project_root: Path = Field(
