@@ -2,9 +2,10 @@
 
 An autonomous, self-healing pipeline for extracting, validating, and persistently storing Chilean building expense reports (*"Informe Gastos Comunes"*).
 
-This repository currently implements **Phase 1** and **Phase 2** of the project roadmap:
+This repository implements **Phase 1**, **Phase 2**, and **Phase 3** of the project roadmap:
 * **Phase 1 (PDF Extractor & Cross-Validation)**: LangGraph state machine utilizing Google Gemini multimodal vision, deterministic integer financial math validation, and self-healing error correction loops.
 * **Phase 2 (Storage Layer & Spool Sync)**: Persistent FastAPI backend service and normalized 3NF SQLite database with UUIDv7 primary keys, automatic duplicate overwrites (upserts), and resilient cloud spooling.
+* **Phase 3 (Analytics & Plotting Engine)**: Autonomous LangGraph SQL-and-Matplotlib analytical agent featuring a two-hop variance analysis loop, 3-layer schema privacy defense, strict HTTP-only Data Gateway isolation (zero direct DB access), and an offline circuit breaker.
 
 ---
 
@@ -14,18 +15,26 @@ This repository currently implements **Phase 1** and **Phase 2** of the project 
                                       PHASE 1                                                PHASE 2
 ┌───────────────────────┐    ┌────────────────────────────────────────┐             ┌─────────────────────────┐
 │                       │    │        LangGraph Extractor             │             │     FastAPI Backend     │
-│   PDF Expense Report  │───▶│  • Gemini Multimodal Vision            │             │  • REST API endpoints   │
+│   PDF Expense Report  │───▶│  • Gemini Multimodal Vision            │             │  • REST API & Gateway   │
 │ (examples/2026-9.pdf) │    │  • Deterministic integer CLP validator │             │  • Lifespan management  │
 │                       │    │  • Self-healing retry feedback loop    │             │  • Duplicate detection  │
 └───────────────────────┘    └──────────────────┬─────────────────────┘             └────────────┬────────────┘
                                                 │                                                │
                                                 ▼                                                ▼
-                                    ┌───────────────────────┐                       ┌─────────────────────────┐
-                                    │      Spool Queue      │   HTTP Ingestion      │     SQLite Database     │
-                                    │  • pending/ (offline) │──────────────────────▶│   (data/storage/        │
-                                    │  • synced/  (online)  │                       │      expenses.db)       │
-                                    │  • failed/  (dead)    │                       │  • 3NF relational schema│
-                                    └───────────────────────┘                       └─────────────────────────┘
+                                    ┌───────────────────────┐      HTTP Ingestion   ┌─────────────────────────┐
+                                    │      Spool Queue      │──────────────────────▶│     SQLite Database     │
+                                    │  • pending/ (offline) │                       │   (data/storage/        │
+                                    │  • synced/  (online)  │   HTTP Data Gateway   │      expenses.db)       │
+                                    │  • failed/  (dead)    │◀──────────────────────│  • 3NF relational schema│
+                                    └───────────────────────┘          │            └─────────────────────────┘
+                                                                       ▼
+                                                            ┌───────────────────────┐
+                                                            │        PHASE 3        │
+                                                            │  Data Analyst Agent   │
+                                                            │  • Strict HTTP Client │
+                                                            │  • Two-Hop Variance   │
+                                                            │  • Sandbox Plotting   │
+                                                            └───────────────────────┘
 ```
 
 ---
@@ -153,9 +162,25 @@ If the backend service is temporarily offline, the extractor gracefully stages f
 
 ---
 
-### Step 4: Query the Stored Data
+### Step 4: Query & Analyze the Stored Data
 
-#### Option A: Via REST API
+#### Option A: Via the Phase 3 Data Analyst Agent (Natural Language & Charts)
+> **Note:** The Data Analyst agent enforces strict service isolation and queries the database exclusively over HTTP via the Backend Data Gateway (`POST /api/v1/analytics/execute-query`). Ensure the FastAPI server (`Step 1`) is running. If the backend server is offline, the agent trips a circuit breaker and returns a user-friendly service-unavailable notice without accessing SQLite directly.
+
+```bash
+# Run natural language trend & plotting queries via CLI
+python -m analytics.cli "Muestra la evolución del gasto total mensual en 2025. Incluye un gráfico."
+
+# Run two-hop variance attribution (with interactive clarification if multi-phase)
+python -m analytics.cli "¿A qué se debe el aumento del gasto en el 2026?"
+
+# Or query via the high-level REST endpoint
+curl -s -X POST http://localhost:8000/api/v1/analytics/query \
+     -H "Content-Type: application/json" \
+     -d '{"query": "Total gastado en consumos durante 2025", "include_chart": true}' | jq .
+```
+
+#### Option B: Via Persistence REST API
 ```bash
 # List all ingested reports
 curl -s http://localhost:8000/api/v1/reports | jq .
@@ -164,7 +189,7 @@ curl -s http://localhost:8000/api/v1/reports | jq .
 curl -s http://localhost:8000/api/v1/reports/period/2026-10-01 | jq .
 ```
 
-#### Option B: Directly via SQLite CLI
+#### Option C: Directly via SQLite CLI
 > **Note:** Run queries on a single line to avoid Bash backslash whitespace issues.
 
 ```bash
@@ -182,20 +207,20 @@ sqlite3 -header -column data/storage/expenses.db "SELECT name, normalized_name, 
 
 ## 🧪 Running the Test Suite
 
-The test suite contains 29 offline automated tests that execute in seconds without calling the Gemini API:
+The test suite contains 81 offline automated tests (covering Phase 1 extraction, Phase 2 persistence/spooling, and Phase 3 analytics/isolation) that execute in seconds without calling the live Gemini API:
 
 ```bash
-# Run all tests
+# Run all 81 tests
 python -m pytest -v
 
-# Run Phase 1 extractor tests
+# Run Phase 1 & Phase 3 workflow/unit tests
 python -m pytest tests/ -v
 
-# Run Phase 2 backend & storage tests
+# Run Phase 2 & Phase 3 backend/gateway tests
 python -m pytest backend/tests/ -v
 
 # Run with test coverage report
-python -m pytest --cov=data_extractor --cov=backend/app -v
+python -m pytest --cov=data_extractor --cov=analytics --cov=backend/app -v
 ```
 
 ---
@@ -212,6 +237,8 @@ python -m pytest --cov=data_extractor --cov=backend/app -v
 | `DELETE` | `/api/v1/reports/{id}` | Delete report (cascades to all sections and items) |
 | `GET` | `/api/v1/sync/status` | Telemetry on pending, synced, and failed queues |
 | `POST` | `/api/v1/sync/pending` | Batch process and reconcile all files in pending spool |
+| `POST` | `/api/v1/analytics/execute-query` | Read-only SQLite Data Gateway Proxy (table whitelist, 3s timeout, 500-row cap) |
+| `POST` | `/api/v1/analytics/query` | High-level natural language analytics & charting endpoint |
 
 ---
 
@@ -221,17 +248,27 @@ python -m pytest --cov=data_extractor --cov=backend/app -v
 data-analyst/
 ├── AGENTS.md                   # Architectural guidelines and engineering rules
 ├── README.md                   # Project documentation and quickstart
-├── backend/                    # Phase 2: Persistence service
+├── analytics/                  # Phase 3: LangGraph Analytics & Plotting Engine
+│   ├── cli.py                  # CLI entry point for natural language queries & charts
+│   ├── config.py               # Analytics settings & environment configuration
+│   ├── gateway_client.py       # Strict HTTP-only client for the Data Gateway Proxy
+│   ├── nodes.py                # Planner, Trajectory Inspector/Evaluator, SQL Coder, Visualizer, Synthesizer
+│   ├── prompts/                # System instructions & YAML Data Dictionary
+│   ├── sandbox.py              # Isolated headless subprocess runner for Matplotlib
+│   ├── state.py                # TypedDict & Pydantic state/output contracts
+│   └── workflow.py             # LangGraph state machine, checkpointing & circuit breaker
+├── backend/                    # Phase 2: Persistence & Data Gateway service
 │   ├── app/
 │   │   ├── main.py             # FastAPI entrypoint & lifespan
 │   │   ├── models.py           # SQLAlchemy 3NF models (UUIDv7, cascading delete)
 │   │   ├── repository.py       # Atomic ingestion, upsert & query logic
-│   │   ├── routes/             # API routes (reports.py, sync.py)
+│   │   ├── routes/             # API routes (reports.py, sync.py, analytics.py)
 │   │   └── schemas.py          # Pydantic validation schemas
-│   └── tests/                  # Integration tests for API and database
+│   └── tests/                  # Integration tests for API, Data Gateway, and database
 ├── data/
 │   ├── input/                  # Incoming PDF files
 │   ├── output/
+│   │   ├── charts/             # Rendered analytical PNG charts
 │   │   ├── pending/            # Staged reports waiting for DB sync
 │   │   ├── synced/             # Successfully committed reports
 │   │   └── failed/             # Dead-letter queue for rejected reports
@@ -245,5 +282,6 @@ data-analyst/
 │   ├── validator.py            # Deterministic integer arithmetic checker
 │   └── workflow.py             # LangGraph state machine & spool router
 ├── examples/                   # Real Chilean expense reports (PDF format)
-└── tests/                      # Phase 1 unit and integration tests
+└── tests/                      # Phase 1 & Phase 3 unit and integration tests
 ```
+

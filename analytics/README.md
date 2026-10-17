@@ -8,17 +8,25 @@ Autonomous LangGraph analytical question-answering and charting engine for Chile
 
 1. **Natural Language to SQL**: Decomposes complex user questions and translates them into valid read-only SQLite queries (`expense_reports`, `expense_sections`, `expense_items`).
 2. **Automated Matplotlib Charting**: Dynamically decides when a visual plot is beneficial, generates Python visualization code, and renders clean static PNG charts in `data/output/charts/`.
-3. **Enterprise Data Gateway Proxy**: Decouples the AI agent from direct database access. Mediates all queries through `POST /api/v1/analytics/execute-query` with a 3.0s progress handler timeout and 500-row ceiling.
+3. **Strict HTTP Data Gateway Isolation & Circuit Breaker**:
+   - **Zero In-Process DB Access**: The `analytics` package never imports `backend` internals or opens `data/storage/expenses.db` directly. All queries are mediated over HTTP (`POST /api/v1/analytics/execute-query`) with a 3.0s progress handler timeout and 500-row ceiling.
+   - **Offline Circuit Breaker**: If the FastAPI backend is unreachable, the workflow immediately trips a circuit breaker (`gateway_unavailable=True`), skipping SQL self-healing retries and LLM synthesis to return a deterministic Spanish service-unavailable notice (`### ⚠️ Servicio de Datos No Disponible`).
 4. **3-Layer Defense Against Schema Leakage**:
    - **Scope Guard (Planner)**: Detects and rejects queries probing internal table names or infrastructure.
    - **Table Whitelist (Gateway)**: Strictly rejects `sqlite_master`, `sqlite_schema`, and `pragma_*` with HTTP 403 Forbidden.
    - **Zero Schema Exposure (Synthesizer)**: Answers exclusively in business domain terms without leaking table/column jargon.
-5. **Subprocess Code Sandbox**: Executes generated plotting scripts in an isolated, headless (`MPLBACKEND=Agg`) subprocess with a 10s execution timeout.
-6. **Deterministic Arithmetic**: Never allows an LLM to sum or calculate metrics; all numbers are computed by SQLite.
+5. **Two-Hop Variance Analysis & Interactive Clarification**: Fact-checks user premises against chronological monthly trajectories (Hop 1), pauses via `interrupt()` when trajectories are multi-phase or ambiguous, and computes category delta attributions (`delta_clp`) via SQLite CTEs (Hop 2).
+6. **Subprocess Code Sandbox**: Executes generated plotting scripts in an isolated, headless (`MPLBACKEND=Agg`) subprocess with a 10s execution timeout.
+7. **Deterministic Arithmetic**: Never allows an LLM to sum or calculate metrics; all numbers are computed by SQLite.
 
 ---
 
 ## 🚀 How to Run
+
+> **Prerequisite:** Because `analytics` enforces strict service isolation, ensure the FastAPI backend (Data Gateway) is running before executing live queries:
+> ```bash
+> uvicorn backend.app.main:app --reload --port 8000
+> ```
 
 ### Option 1: Terminal CLI (Quickest)
 
@@ -35,7 +43,7 @@ python -m analytics.cli "Compara el gasto de Mantenciones y Servicios entre 2025
 # Output structured JSON instead of markdown
 python -m analytics.cli "Resumen de gastos enero 2026" --json
 
-# Specific and drilling question about the reason of why expences are going up
+# Specific and drilling question about the reason why expenses are going up (Two-Hop Variance Loop)
 python -m analytics.cli "Como ha sido la evolucion del gasto comun durante el 2026?.A que se debe el aumento del gasto?"
 python -m analytics.cli "A que se debe el aumento del gasto en el 2026?"
 ```
@@ -64,13 +72,7 @@ print(f"Latency: {result.latency_seconds}s")
 
 ### Option 3: REST API (FastAPI Backend)
 
-Start the backend server:
-
-```bash
-uvicorn backend.app.main:app --reload --port 8000
-```
-
-Then invoke the high-level analytics endpoint:
+With the backend server running on port `8000`, invoke the high-level analytics endpoint:
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/analytics/query \
@@ -85,15 +87,16 @@ curl -X POST http://localhost:8000/api/v1/analytics/query \
 Run the automated test suite with `pytest`:
 
 ```bash
-# Run all analytics unit, security, and sandbox tests
+# Run all analytics unit, variance, security, and sandbox tests
 pytest tests/test_analytics_* backend/tests/test_analytics_* -v
 
-# Run complete workspace test suite (70 tests)
+# Run complete workspace test suite (81 tests)
 pytest -v
 ```
 
 ### Key Test Coverage:
 * `tests/test_analytics_sandbox.py`: Verifies PNG generation, 10s infinite loop timeouts, and error handling.
-* `tests/test_analytics_workflow.py`: Verifies LangGraph routing, Scope Guard refusal, and self-healing retries.
+* `tests/test_analytics_workflow.py`: Verifies LangGraph routing, Scope Guard refusal, self-healing retries, strict HTTP gateway isolation, and the offline circuit breaker.
+* `tests/test_analytics_variance.py`: Verifies Two-Hop variance analysis, `interrupt()` clarification pause/resume, and CTE delta attribution via `TestClient` gateway fixtures.
 * `backend/tests/test_analytics_gateway.py`: Verifies Table Whitelisting (HTTP 403 on `sqlite_master`), read-only enforcement, and 3s query timeout.
 * `backend/tests/test_analytics_route.py`: Verifies the high-level `POST /api/v1/analytics/query` endpoint.
