@@ -230,3 +230,115 @@ def test_scope_guard_refusal_execution():
     assert "final_markdown" in result
     assert "no está autorizado a divulgar información sobre la arquitectura" in result["final_markdown"]
     assert "expense_sections" not in result["final_markdown"]
+
+
+# ============================================================================
+# 4. Strict Gateway Isolation & Offline Circuit Breaker Tests
+# ============================================================================
+
+
+def test_gateway_client_offline_never_falls_back_in_process(monkeypatch):
+    """Verify query_data_gateway does not fall back to in-process SQLite when server is down."""
+    import requests
+    from analytics.gateway_client import (
+        is_gateway_unavailable_error,
+        query_data_gateway,
+    )
+
+    def _raise_conn_error(*args, **kwargs):
+        raise requests.exceptions.ConnectionError("Connection refused at 127.0.0.1:8000")
+
+    monkeypatch.setattr("analytics.gateway_client.requests.post", _raise_conn_error)
+
+    rows, err = query_data_gateway("SELECT * FROM expense_reports")
+    assert rows is None
+    assert err is not None
+    assert is_gateway_unavailable_error(err) is True
+    assert "DataGatewayUnavailableError:" in err
+
+
+def test_standard_query_offline_circuit_breaker_skips_retries_and_returns_offline_notice(monkeypatch):
+    """Verify standard query trips circuit breaker on offline gateway without retrying SQL or calling synthesizer LLM."""
+    import json
+    import requests
+    from analytics.workflow import run_analysis
+
+    def _raise_conn_error(*args, **kwargs):
+        raise requests.exceptions.ConnectionError("Connection refused")
+
+    monkeypatch.setattr("analytics.gateway_client.requests.post", _raise_conn_error)
+
+    plan_json = IntentPlan(
+        is_authorized_query=True,
+        analysis_type="scalar_lookup",
+        temporal_resolution="snapshot",
+        analysis_goal="Obtener gasto total de septiembre 2026",
+        relevant_tables=["expense_reports"],
+        time_scope="2026-09-01",
+        requires_visualization=False,
+    ).model_dump_json()
+
+    sql_json = json.dumps(
+        {
+            "reasoning": "Fetch September 2026 total",
+            "sql_query": "SELECT calculated_grand_total FROM expense_reports WHERE period_date = '2026-09-01'",
+        }
+    )
+
+    mock_client = MagicMock()
+    # Only 2 LLM calls should ever occur: [1] Planner, [2] SQL Coder (1st attempt).
+    # Zero retries and zero Synthesizer LLM calls!
+    mock_client.models.generate_content.side_effect = [
+        MagicMock(text=plan_json),
+        MagicMock(text=sql_json),
+    ]
+
+    with patch("analytics.nodes.get_gemini_client", return_value=mock_client):
+        result = run_analysis("Total gastado en septiembre 2026", max_retries=2)
+
+    assert mock_client.models.generate_content.call_count == 2
+    assert result.data is None
+    assert "Servicio de Datos No Disponible" in result.summary
+    assert len(result.error_history) == 1
+    assert result.error_history[0]["node"] == "sql_gateway_node"
+    assert "DataGatewayUnavailableError:" in result.error_history[0]["error_message"]
+
+
+def test_variance_query_offline_circuit_breaker_at_hop_1(monkeypatch):
+    """Verify variance query trips circuit breaker at Hop 1 (trajectory_inspector) when gateway is offline."""
+    import requests
+    from analytics.workflow import run_analysis
+
+    def _raise_conn_error(*args, **kwargs):
+        raise requests.exceptions.ConnectionError("Connection refused")
+
+    monkeypatch.setattr("analytics.gateway_client.requests.post", _raise_conn_error)
+
+    plan_json = IntentPlan(
+        is_authorized_query=True,
+        analysis_type="variance_driver",
+        temporal_resolution="monthly",
+        analysis_goal="Identificar causas del aumento en 2026",
+        relevant_tables=["expense_reports", "expense_sections"],
+        time_scope="2026",
+        requires_visualization=True,
+    ).model_dump_json()
+
+    mock_client = MagicMock()
+    # Only 1 LLM call should occur: [1] Planner.
+    # Trajectory Evaluator, SQL Coder, Visualizer, and Synthesizer LLM calls are all bypassed!
+    mock_client.models.generate_content.side_effect = [
+        MagicMock(text=plan_json),
+    ]
+
+    with patch("analytics.nodes.get_gemini_client", return_value=mock_client):
+        result = run_analysis("¿A qué se debe el aumento del gasto en el 2026?")
+
+    assert mock_client.models.generate_content.call_count == 1
+    assert result.data is None
+    assert result.needs_clarification is False
+    assert "Servicio de Datos No Disponible" in result.summary
+    assert len(result.error_history) == 1
+    assert result.error_history[0]["node"] == "trajectory_inspector_node"
+    assert "DataGatewayUnavailableError:" in result.error_history[0]["error_message"]
+

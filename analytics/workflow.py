@@ -57,6 +57,16 @@ def route_after_planner(
     return "sql_coder"
 
 
+def route_after_inspector(
+    state: DataAnalystState,
+) -> Literal["synthesizer", "trajectory_evaluator"]:
+    """Route after Trajectory Inspector: short-circuit to synthesizer if Data Gateway is unreachable."""
+    if state.get("gateway_unavailable"):
+        logger.warning("Data Gateway offline during trajectory inspection; routing to synthesizer")
+        return "synthesizer"
+    return "trajectory_evaluator"
+
+
 def route_after_evaluator(
     state: DataAnalystState,
 ) -> Literal["clarification", "sql_coder"]:
@@ -80,7 +90,11 @@ def route_after_clarification(
 def route_after_sql_gateway(
     state: DataAnalystState,
 ) -> Literal["sql_coder", "visualizer", "synthesizer"]:
-    """Evaluate gateway response: retry on SQL error, proceed to visualizer, or go to synthesizer."""
+    """Evaluate gateway response: short-circuit on gateway outage, retry on SQL error, proceed to visualizer, or go to synthesizer."""
+    if state.get("gateway_unavailable"):
+        logger.warning("Data Gateway offline during SQL execution; routing directly to synthesizer")
+        return "synthesizer"
+
     results = state.get("sql_results")
     retry_count = state.get("retry_count", 0)
     max_retries = state.get("max_retries", 2)
@@ -155,7 +169,14 @@ def build_analytics_graph(checkpointer: MemorySaver | None = None):
         },
     )
 
-    workflow.add_edge("trajectory_inspector", "trajectory_evaluator")
+    workflow.add_conditional_edges(
+        "trajectory_inspector",
+        route_after_inspector,
+        {
+            "synthesizer": "synthesizer",
+            "trajectory_evaluator": "trajectory_evaluator",
+        },
+    )
 
     workflow.add_conditional_edges(
         "trajectory_evaluator",
@@ -264,6 +285,7 @@ def run_analysis(
             "visualization_code": None,
             "chart_file_path": None,
             "final_markdown": None,
+            "gateway_unavailable": False,
             "retry_count": 0,
             "max_retries": retries,
             "error_history": [],

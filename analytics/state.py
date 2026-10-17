@@ -133,6 +133,7 @@ class DataAnalystState(TypedDict, total=False):
     final_markdown: Optional[str]
 
     # 3. CONTROL & SAFETY TIER (Circuit breakers & retry routing)
+    gateway_unavailable: bool
     retry_count: int
     max_retries: int
     error_history: Annotated[list[ExecutionError], operator.add]

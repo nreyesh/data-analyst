@@ -13,7 +13,10 @@ from langgraph.types import interrupt
 from pydantic import BaseModel, Field
 
 from analytics.config import get_analytics_settings
-from analytics.gateway_client import query_data_gateway
+from analytics.gateway_client import (
+    is_gateway_unavailable_error,
+    query_data_gateway,
+)
 from analytics.prompt_loader import load_data_dictionary_str, load_prompt_template
 from analytics.sandbox import run_plotting_sandbox
 from analytics.state import (
@@ -171,12 +174,25 @@ def trajectory_inspector_node(state: DataAnalystState) -> dict[str, Any]:
 
     rows, error_msg = query_data_gateway(sql=sql)
     if error_msg is not None:
+        if is_gateway_unavailable_error(error_msg):
+            err_record = ExecutionError(
+                node="trajectory_inspector_node",
+                error_message=error_msg,
+                attempt=1,
+            )
+            logger.error("Data Gateway unreachable during trajectory inspection: %s", error_msg)
+            return {
+                "macro_trajectory": None,
+                "gateway_unavailable": True,
+                "error_history": [err_record],
+            }
         logger.warning("Trajectory inspection query failed: %s", error_msg)
         return {"macro_trajectory": []}
 
     logger.info("Trajectory inspector fetched %d monthly total records", len(rows or []))
     return {
         "macro_trajectory": rows or [],
+        "gateway_unavailable": False,
     }
 
 
@@ -371,6 +387,19 @@ def sql_gateway_node(state: DataAnalystState) -> dict[str, Any]:
     rows, error_msg = query_data_gateway(sql=sql)
 
     if error_msg is not None:
+        if is_gateway_unavailable_error(error_msg):
+            err_record = ExecutionError(
+                node="sql_gateway_node",
+                error_message=error_msg,
+                attempt=1,
+            )
+            logger.error("Data Gateway unreachable during SQL execution: %s", error_msg)
+            return {
+                "sql_results": None,
+                "gateway_unavailable": True,
+                "error_history": [err_record],
+            }
+
         attempt = state.get("retry_count", 0) + 1
         err_record = ExecutionError(
             node="sql_gateway_node",
@@ -380,6 +409,7 @@ def sql_gateway_node(state: DataAnalystState) -> dict[str, Any]:
         logger.warning("Gateway query attempt %d failed: %s", attempt, error_msg)
         return {
             "sql_results": None,
+            "gateway_unavailable": False,
             "error_history": [err_record],
             "retry_count": attempt,
         }
@@ -387,6 +417,7 @@ def sql_gateway_node(state: DataAnalystState) -> dict[str, Any]:
     logger.info("Gateway query succeeded: fetched %d rows", len(rows) if rows else 0)
     return {
         "sql_results": rows or [],
+        "gateway_unavailable": False,
         "retry_count": 0,  # reset retry counter for subsequent nodes
     }
 
@@ -508,6 +539,21 @@ def synthesizer_node(state: DataAnalystState, client: genai.Client | None = None
         )
         return {
             "final_markdown": refusal_text,
+        }
+
+    # If the Data Gateway service is unreachable/offline, deliver deterministic offline notice
+    if state.get("gateway_unavailable"):
+        settings = get_analytics_settings()
+        offline_text = (
+            "### ⚠️ Servicio de Datos No Disponible\n\n"
+            f"No fue posible establecer conexión con el **Data Gateway** (`{settings.backend_base_url}`) "
+            "para consultar los registros financieros de la comunidad.\n\n"
+            "Por políticas de aislamiento y seguridad de grado productivo, el agente analítico opera de forma "
+            "desacoplada y no accede directamente al archivo de base de datos local. Por favor, verifica que "
+            "el servicio backend esté activo (`uvicorn backend.app.main:app`) e intenta nuevamente."
+        )
+        return {
+            "final_markdown": offline_text,
         }
 
     gemini_client = client or get_gemini_client()

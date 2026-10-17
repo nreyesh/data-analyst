@@ -1,15 +1,21 @@
-"""Client adapter for dispatching queries to the Data Gateway Proxy."""
+"""Client adapter for dispatching queries to the Data Gateway Proxy over HTTP."""
 
 from __future__ import annotations
 
 import logging
 from typing import Any
 import requests
-from fastapi import HTTPException
 
 from analytics.config import get_analytics_settings
 
 logger = logging.getLogger("analytics.gateway_client")
+
+GATEWAY_UNAVAILABLE_PREFIX = "DataGatewayUnavailableError:"
+
+
+def is_gateway_unavailable_error(error_msg: str | None) -> bool:
+    """Return True if the error message indicates the Data Gateway service is unreachable/offline."""
+    return bool(error_msg and error_msg.startswith(GATEWAY_UNAVAILABLE_PREFIX))
 
 
 def query_data_gateway(
@@ -18,7 +24,7 @@ def query_data_gateway(
     max_rows: int | None = None,
     gateway_url: str | None = None,
 ) -> tuple[list[dict[str, Any]] | None, str | None]:
-    """Execute a query through the Data Gateway Proxy with automatic local fallback.
+    """Execute a query strictly through the remote Data Gateway Proxy HTTP endpoint.
 
     Args:
         sql: SQLite query string to execute.
@@ -29,7 +35,9 @@ def query_data_gateway(
     Returns:
         tuple[list[dict] | None, error_message | None]:
             On success: (rows, None)
-            On failure: (None, error_message)
+            On query error (HTTP 4xx): (None, "DataGatewayError (<status>): <detail>")
+            On gateway outage (ConnectionError/Timeout/HTTP 502-504):
+                (None, "DataGatewayUnavailableError: <detail>")
     """
     settings = get_analytics_settings()
     timeout = timeout_seconds if timeout_seconds is not None else settings.query_timeout_seconds
@@ -42,7 +50,6 @@ def query_data_gateway(
         "max_rows": rows_limit,
     }
 
-    # 1. Attempt HTTP call to external Data Gateway
     try:
         response = requests.post(
             target_url,
@@ -53,35 +60,43 @@ def query_data_gateway(
             data = response.json()
             return data.get("rows", []), None
 
-        error_detail = response.json().get("detail", response.text) if response.headers.get("content-type") == "application/json" else response.text
+        content_type = response.headers.get("content-type", "")
+        error_detail = (
+            response.json().get("detail", response.text)
+            if "application/json" in content_type
+            else response.text
+        )
+
+        if response.status_code in (502, 503, 504):
+            logger.error(
+                "Data Gateway service unavailable (HTTP %d) at %s: %s",
+                response.status_code,
+                target_url,
+                error_detail,
+            )
+            return (
+                None,
+                f"{GATEWAY_UNAVAILABLE_PREFIX} Service unavailable (HTTP {response.status_code}) at {target_url}: {error_detail}",
+            )
+
         logger.warning(
             "Data Gateway returned HTTP %d: %s", response.status_code, error_detail
         )
         return None, f"DataGatewayError ({response.status_code}): {error_detail}"
 
-    except requests.exceptions.ConnectionError:
-        logger.info(
-            "Data Gateway service offline at %s. Falling back to in-process gateway execution.",
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+        logger.error(
+            "Data Gateway service unreachable at %s: %s",
             target_url,
+            exc,
+        )
+        return (
+            None,
+            f"{GATEWAY_UNAVAILABLE_PREFIX} Cannot connect to Data Gateway at {target_url} ({exc})",
         )
     except Exception as exc:
-        logger.warning("HTTP gateway query failed (%s). Falling back to in-process.", exc)
-
-    # 2. Local in-process fallback via backend router controller
-    try:
-        from backend.app.routes.analytics import ExecuteQueryRequest, execute_query
-
-        req = ExecuteQueryRequest(
-            sql=sql,
-            timeout_seconds=timeout,
-            max_rows=rows_limit,
+        logger.error("Unexpected HTTP gateway failure at %s: %s", target_url, exc)
+        return (
+            None,
+            f"{GATEWAY_UNAVAILABLE_PREFIX} Unexpected error communicating with Data Gateway at {target_url} ({exc})",
         )
-        resp = execute_query(req)
-        return resp.rows, None
-
-    except HTTPException as exc:
-        logger.warning("In-process Data Gateway returned HTTP %d: %s", exc.status_code, exc.detail)
-        return None, f"DataGatewayError ({exc.status_code}): {exc.detail}"
-    except Exception as exc:
-        logger.error("In-process Data Gateway execution failed: %s", exc, exc_info=True)
-        return None, f"DataGatewayExecutionError: {exc}"

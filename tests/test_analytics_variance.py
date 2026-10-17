@@ -107,7 +107,18 @@ def test_route_after_planner_variance_and_clarification():
 # ============================================================================
 
 
-def test_trajectory_inspector_fetches_2026_chronological_totals():
+@pytest.fixture
+def gateway_bridge(monkeypatch):
+    """Route analytics.gateway_client HTTP calls through FastAPI TestClient(app)."""
+    client = TestClient(app)
+
+    def _mock_post(url: str, json: dict, timeout: float = 5.0):
+        return client.post("/api/v1/analytics/execute-query", json=json)
+
+    monkeypatch.setattr("analytics.gateway_client.requests.post", _mock_post)
+
+
+def test_trajectory_inspector_fetches_2026_chronological_totals(gateway_bridge):
     """Verify trajectory_inspector_node queries expense_reports for 2026 in chronological order."""
     state: DataAnalystState = {
         "user_query": "¿A qué se debe el aumento del gasto en el 2026?",
@@ -189,7 +200,7 @@ def test_trajectory_evaluator_detects_paradox_and_isolates_inflection_points():
 # ============================================================================
 
 
-def test_end_to_end_variance_loop_identifies_consumos_over_static_mantenciones():
+def test_end_to_end_variance_loop_identifies_consumos_over_static_mantenciones(gateway_bridge):
     """Verify full two-hop workflow pauses on ambiguous 2026 query, resumes with user choice,
     and executes a real SQLite CTE delta query ranking 'consumos' above static 'mantenciones y servicios'.
     """
