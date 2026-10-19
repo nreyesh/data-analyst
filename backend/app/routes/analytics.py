@@ -16,7 +16,15 @@ logger = logging.getLogger("backend.app.routes.analytics")
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
-ALLOWED_TABLES = {"expense_reports", "expense_sections", "expense_items"}
+ALLOWED_TABLES = {
+    "expense_reports",
+    "expense_sections",
+    "expense_items",
+    "unit_bills",
+    "unit_bill_concepts",
+    "unit_bill_consumptions",
+    "unit_bill_charges",
+}
 FORBIDDEN_CATALOGS_PATTERN = re.compile(
     r"\b(sqlite_master|sqlite_schema|sqlite_temp_master|pragma[a-zA-Z0-9_]*)\b",
     re.IGNORECASE,

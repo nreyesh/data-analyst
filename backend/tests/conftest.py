@@ -64,8 +64,9 @@ def client(db_session: Session) -> Generator[TestClient, None, None]:
 
 @pytest.fixture
 def sample_payload_2026_9() -> dict:
-    """Load sample JSON payload from data/output/2026-9.json or fixtures."""
+    """Load sample JSON payload from data/output/general/synced/2026-9.json or fixtures."""
     candidates = [
+        Path(__file__).resolve().parent.parent.parent / "data" / "output" / "general" / "synced" / "2026-9.json",
         Path(__file__).resolve().parent.parent.parent / "data" / "output" / "2026-9.json",
         Path(__file__).resolve().parent.parent.parent / "data" / "output" / "synced" / "2026-9.json",
         Path(__file__).resolve().parent.parent.parent / "tests" / "fixtures" / "2026_9_expected.json",
@@ -75,3 +76,17 @@ def sample_payload_2026_9() -> dict:
             with open(p, encoding="utf-8") as f:
                 return json.load(f)
     raise FileNotFoundError("Could not find sample_payload_2026_9 fixture")
+
+
+@pytest.fixture
+def sample_unit_payload_504b_2026_08() -> dict:
+    """Load sample unit bill JSON payload from tests/fixtures/504b_2026_08_expected.json."""
+    fixture_path = (
+        Path(__file__).resolve().parent.parent.parent
+        / "tests"
+        / "fixtures"
+        / "504b_2026_08_expected.json"
+    )
+    with open(fixture_path, encoding="utf-8") as f:
+        return json.load(f)
+

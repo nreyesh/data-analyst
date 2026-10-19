@@ -158,3 +158,175 @@ class ExtractionState(TypedDict):
     max_retries: int
     is_valid: bool
     final_output: dict | None
+
+
+# ============================================================================
+# Unit Billing Statement ("Nota de Cobro") Domain Models
+# ============================================================================
+
+UnitChargeType = Literal["recargo", "fixed_charge"]
+
+
+class ConceptItem(BaseModel):
+    """Line item from the 'Concepto / Detalle / Monto a pagar' table."""
+
+    concept: str = Field(
+        description="Clean concept name (e.g. 'Gasto Común', 'Fondo de Reserva 5%', 'Fondo Impermeabilizacion')."
+    )
+    detail: str | None = Field(
+        default=None,
+        description="Detail string or percentage (e.g. '0,16736 %', '5,00 %') or None if empty.",
+    )
+    amount: int = Field(
+        description="Payable amount in integer Chilean Pesos (CLP), e.g. 93236."
+    )
+
+
+class ConsumptionItem(BaseModel):
+    """Row from the 'Consumos Generales' metered consumption table."""
+
+    item_name: str = Field(
+        description="Name of the consumption meter or tower (e.g. 'Torre B')."
+    )
+    previous_reading: float = Field(
+        description="Previous meter reading ('Lectura Anterior'), e.g. 100.581."
+    )
+    current_reading: float = Field(
+        description="Current meter reading ('Lectura Actual'), e.g. 102.2823."
+    )
+    consumption: float = Field(
+        description="Metered consumption delta ('Consumos'), e.g. 1.7013."
+    )
+    unit_rate: float = Field(
+        description="Unit price rate ('Valor'), e.g. 8340.24."
+    )
+    total: int = Field(
+        description="Total consumption charge in integer CLP ('Total'), e.g. 14189."
+    )
+
+
+class UnitChargeItem(BaseModel):
+    """Row from the 'Gastos por Unidad' table (recargos/fines and fixed per-unit charges)."""
+
+    charge_name: str = Field(
+        description="Name of the unit charge, fine/infraction, or fixed fund (e.g. 'Fondo de Indemnizacion')."
+    )
+    charge_type: UnitChargeType = Field(
+        default="fixed_charge",
+        description="'recargo' for fines/surcharges appearing above 'Subtotal Recargos', or 'fixed_charge' for flat per-unit charges appearing below 'Subtotal Recargos' (e.g. 'Fondo de Indemnizacion').",
+    )
+    amount: int = Field(
+        description="Monetary integer value in Chilean Pesos (CLP), e.g. 2500."
+    )
+
+
+class UnitBillReport(BaseModel):
+    """Complete structured individual apartment billing statement ('Nota de Cobro')."""
+
+    issue_date: str = Field(
+        description="Billing period date normalized strictly to 01/MM/YYYY (e.g. 01/08/2026 for Agosto 2026)."
+    )
+    unit_code: str = Field(
+        min_length=1,
+        description="Apartment unit identifier from the header (e.g. 'B-504').",
+    )
+    alicuota_total: float = Field(
+        description="Total prorate percentage ('Alícuota Total') as a float (e.g. 0.16736 for '0,16736 %')."
+    )
+    last_payment_date: str | None = Field(
+        default=None,
+        description="Date of last payment ('Fecha ultimo Pago') normalized strictly to DD/MM/YYYY (e.g. '31/08/2026'), or None if empty.",
+    )
+    last_payment_amount: int | None = Field(
+        default=None,
+        description="Amount of last payment ('Monto ultimo Pago') in integer CLP (e.g. 125204), or None if empty.",
+    )
+    concepts: list[ConceptItem] = Field(
+        default_factory=list,
+        description="Rows from the 'Concepto / Detalle / Monto a pagar' table (excluding 'Subtotal Departamento').",
+    )
+    consumptions: list[ConsumptionItem] = Field(
+        default_factory=list,
+        description="Rows from the 'Consumos Generales' table (excluding 'Subtotal Consumo').",
+    )
+    unit_charges: list[UnitChargeItem] = Field(
+        default_factory=list,
+        description="Non-zero rows from the 'Gastos por Unidad' table (excluding 'Subtotal Recargos' and 'Total del mes').",
+    )
+
+    @field_validator("issue_date")
+    @classmethod
+    def validate_issue_date(cls, v: str) -> str:
+        v_clean = v.strip()
+        if not re.match(r"^01/\d{2}/\d{4}$", v_clean):
+            raise ValueError(
+                f"issue_date must be strictly in '01/MM/YYYY' format, received: {v!r}"
+            )
+        return v_clean
+
+    @field_validator("unit_code")
+    @classmethod
+    def normalize_unit_code(cls, v: str) -> str:
+        v_clean = v.strip()
+        if not v_clean:
+            raise ValueError("unit_code must not be empty")
+        return v_clean
+
+    @field_validator("last_payment_date")
+    @classmethod
+    def validate_last_payment_date(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v_clean = v.strip().replace("-", "/")
+        if not v_clean:
+            return None
+        if not re.match(r"^\d{2}/\d{2}/\d{4}$", v_clean):
+            raise ValueError(
+                f"last_payment_date must be in 'DD/MM/YYYY' format, received: {v!r}"
+            )
+        return v_clean
+
+
+class UnitValidationResult(BaseModel):
+    """Cross-validation outcome for an individual unit billing statement."""
+
+    is_valid: bool
+    calculated_dept_subtotal: int = 0
+    declared_dept_subtotal: int | None = None
+    dept_subtotal_difference: int = 0
+    calculated_consumo_subtotal: int = 0
+    declared_consumo_subtotal: int | None = None
+    consumo_subtotal_difference: int = 0
+    calculated_recargos_subtotal: int = 0
+    declared_recargos_subtotal: int | None = None
+    recargos_subtotal_difference: int = 0
+    calculated_unit_subtotal: int = 0
+    calculated_total_month: int = 0
+    declared_total_month: int | None = None
+    total_month_difference: int = 0
+    errors: list[str] = Field(default_factory=list)
+
+
+class UnitExtractionState(TypedDict):
+    """State schema for the LangGraph unit bill self-healing workflow."""
+
+    pdf_path: str
+    pdf_bytes: bytes
+    expected_period_date: str | None
+    expected_unit_code: str | None
+    expected_alicuota_total: float | None
+    expected_last_payment_date: str | None
+    expected_last_payment_amount: int | None
+    declared_dept_subtotal: int | None
+    declared_consumo_subtotal: int | None
+    declared_recargos_subtotal: int | None
+    declared_total_month: int | None
+    report: UnitBillReport | None
+    metadata: ExtractionMetadata | None
+    validation_result: UnitValidationResult | None
+    errors: list[str]
+    retry_count: int
+    max_retries: int
+    is_valid: bool
+    final_output: dict | None
+

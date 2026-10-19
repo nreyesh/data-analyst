@@ -30,3 +30,27 @@ def build_self_heal_prompt(validation_errors: list[str]) -> str:
     formatted_errors = "\n".join(f"- {err}" for err in validation_errors)
     template = template_file.read_text(encoding="utf-8")
     return template.replace("{validation_errors}", formatted_errors).strip()
+
+
+def load_unit_system_prompt() -> str:
+    """Load the individual unit bill ('Nota de Cobro') extractor system prompt."""
+    prompt_file = get_prompts_dir() / "unit_extractor_system.txt"
+    if not prompt_file.exists():
+        raise FileNotFoundError(
+            f"Unit system prompt template not found at {prompt_file}"
+        )
+    return prompt_file.read_text(encoding="utf-8").strip()
+
+
+def build_unit_self_heal_prompt(validation_errors: list[str]) -> str:
+    """Build a targeted feedback prompt for unit bill self-healing refinement."""
+    template_file = get_prompts_dir() / "unit_self_heal_feedback.txt"
+    if not template_file.exists():
+        raise FileNotFoundError(
+            f"Unit self-healing prompt template not found at {template_file}"
+        )
+
+    formatted_errors = "\n".join(f"- {err}" for err in validation_errors)
+    template = template_file.read_text(encoding="utf-8")
+    return template.replace("{validation_errors}", formatted_errors).strip()
+

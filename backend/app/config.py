@@ -40,20 +40,47 @@ class Settings(BaseSettings):
         default="expenses.db", validation_alias="DATABASE_FILENAME"
     )
 
+    def get_pending_dir(self, doc_type: str = "general") -> Path:
+        """Return output pending spool directory for a document domain ('general' or 'unit')."""
+        return self.output_dir / doc_type / "pending"
+
+    def get_synced_dir(self, doc_type: str = "general") -> Path:
+        """Return output synced archive directory for a document domain ('general' or 'unit')."""
+        return self.output_dir / doc_type / "synced"
+
+    def get_failed_dir(self, doc_type: str = "general") -> Path:
+        """Return output failed dead-letter directory for a document domain ('general' or 'unit')."""
+        return self.output_dir / doc_type / "failed"
+
     @property
     def pending_dir(self) -> Path:
-        """Directory staging validated reports awaiting database sync."""
-        return self.output_dir / "pending"
+        """Directory staging validated general reports awaiting database sync."""
+        return self.get_pending_dir("general")
 
     @property
     def synced_dir(self) -> Path:
-        """Directory archiving reports successfully committed to the database."""
-        return self.output_dir / "synced"
+        """Directory archiving general reports successfully committed to the database."""
+        return self.get_synced_dir("general")
 
     @property
     def failed_dir(self) -> Path:
-        """Dead-letter directory isolating reports rejected by the backend."""
-        return self.output_dir / "failed"
+        """Dead-letter directory isolating general reports rejected by the backend."""
+        return self.get_failed_dir("general")
+
+    @property
+    def unit_pending_dir(self) -> Path:
+        """Directory staging validated unit bills awaiting database sync."""
+        return self.get_pending_dir("unit")
+
+    @property
+    def unit_synced_dir(self) -> Path:
+        """Directory archiving unit bills successfully committed to the database."""
+        return self.get_synced_dir("unit")
+
+    @property
+    def unit_failed_dir(self) -> Path:
+        """Dead-letter directory isolating unit bills rejected by the backend."""
+        return self.get_failed_dir("unit")
 
     @property
     def database_path(self) -> Path:
@@ -66,8 +93,17 @@ class Settings(BaseSettings):
         return f"sqlite:///{self.database_path.resolve()}"
 
     def ensure_directories(self) -> None:
-        """Ensure storage and spool directories exist."""
-        for path in (self.storage_dir, self.output_dir, self.pending_dir, self.synced_dir, self.failed_dir):
+        """Ensure storage and spool directories exist for both general and unit domains."""
+        for path in (
+            self.storage_dir,
+            self.output_dir,
+            self.pending_dir,
+            self.synced_dir,
+            self.failed_dir,
+            self.unit_pending_dir,
+            self.unit_synced_dir,
+            self.unit_failed_dir,
+        ):
             path.mkdir(parents=True, exist_ok=True)
 
 

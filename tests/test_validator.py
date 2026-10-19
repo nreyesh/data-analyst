@@ -7,13 +7,36 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from data_extractor.ground_truth import extract_ground_truth
-from data_extractor.models import ExpenseReport, Section, SubTopic
-from data_extractor.validator import validate_expense_report
+from data_extractor.ground_truth import extract_ground_truth, extract_unit_ground_truth
+from data_extractor.models import (
+    ConceptItem,
+    ConsumptionItem,
+    ExpenseReport,
+    Section,
+    SubTopic,
+    UnitBillReport,
+    UnitChargeItem,
+)
+from data_extractor.validator import validate_expense_report, validate_unit_bill
+
+
+def _resolve_sample_pdf(filename: str) -> Path:
+    """Resolve sample PDF from examples/ or data/input/general/processed/."""
+    root = Path(__file__).parent.parent
+    for candidate in (
+        root / "examples" / filename,
+        root / "data" / "input" / "general" / "processed" / filename,
+        root / "data" / "input" / "processed" / filename,
+    ):
+        if candidate.exists():
+            return candidate
+    return root / "examples" / filename
 
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "2026_9_expected.json"
-PDF_PATH = Path(__file__).parent.parent / "examples" / "2026-9.pdf"
+UNIT_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "504b_2026_08_expected.json"
+PDF_PATH = _resolve_sample_pdf("2026-9.pdf")
+UNIT_PDF_PATH = Path(__file__).parent.parent / "examples" / "504b-2026-08.pdf"
 
 
 def test_ground_truth_extraction():
@@ -131,10 +154,11 @@ def test_pydantic_model_invariants():
 
 def test_negative_credit_note_validation_2026_7():
     """Verify that negative line items (e.g. Finiquitos $-250.690) validate cleanly against 2026-7.pdf."""
-    pdf_path = Path(__file__).parent.parent / "examples" / "2026-7.pdf"
-    json_path = Path(__file__).parent.parent / "data" / "output" / "2026-7.json"
+    pdf_path = _resolve_sample_pdf("2026-7.pdf")
+    root = Path(__file__).parent.parent
+    json_path = root / "data" / "output" / "general" / "synced" / "2026-7.json"
     if not json_path.exists():
-        json_path = Path(__file__).parent.parent / "data" / "output" / "synced" / "2026-7.json"
+        json_path = root / "data" / "output" / "synced" / "2026-7.json"
     assert pdf_path.exists(), f"Sample PDF not found: {pdf_path}"
     assert json_path.exists(), f"Output JSON not found: {json_path}"
 
@@ -179,7 +203,7 @@ def test_validator_detects_period_date_mismatch():
 )
 def test_ground_truth_period_across_samples(pdf_name: str, expected_period: str):
     """Verify that PyMuPDF deterministic ground truth extracts correct period across sample PDFs."""
-    path = Path(__file__).parent.parent / "examples" / pdf_name
+    path = _resolve_sample_pdf(pdf_name)
     assert path.exists(), f"Sample PDF not found: {path}"
     gt = extract_ground_truth(path)
     assert gt.period_date == expected_period
@@ -187,10 +211,8 @@ def test_ground_truth_period_across_samples(pdf_name: str, expected_period: str)
 
 def test_ground_truth_multi_block_repeated_category():
     """Verify that deterministic ground truth accumulates subtotals for repeated categories (e.g. 2025-11 and 2025-01)."""
-    base_examples = Path(__file__).parent.parent / "examples"
-
     # 2025-11.pdf has payroll ($17,881,388) and staff loan ($0)
-    pdf_11 = base_examples / "2025-11.pdf"
+    pdf_11 = _resolve_sample_pdf("2025-11.pdf")
     assert pdf_11.exists(), f"Sample PDF not found: {pdf_11}"
     gt_11 = extract_ground_truth(pdf_11)
     assert gt_11.period_date == "01/11/2025"
@@ -202,7 +224,7 @@ def test_ground_truth_multi_block_repeated_category():
     assert sum(gt_11.section_totals.values()) == gt_11.grand_total
 
     # 2025-01.pdf has payroll ($14,336,664) and staff loan ($120,000)
-    pdf_01 = base_examples / "2025-01.pdf"
+    pdf_01 = _resolve_sample_pdf("2025-01.pdf")
     assert pdf_01.exists(), f"Sample PDF not found: {pdf_01}"
     gt_01 = extract_ground_truth(pdf_01)
     assert gt_01.period_date == "01/01/2025"
@@ -243,3 +265,73 @@ def test_expense_report_consolidates_duplicate_sections():
     assert len(remun_sec.sub_topics) == 3
     assert [it.name for it in remun_sec.sub_topics] == ["Sueldos", "Aguinaldo", "Préstamos"]
     assert sum(it.value for it in remun_sec.sub_topics) == 11886123 + 520240 + 120000
+
+
+# ============================================================================
+# Unit Billing Statement ("Nota de Cobro") Ground Truth & Validation Tests
+# ============================================================================
+
+
+def test_unit_ground_truth_extraction_504b_2026_08():
+    """Verify PyMuPDF extracts exact anchors from examples/504b-2026-08.pdf."""
+    assert UNIT_PDF_PATH.exists(), f"Unit sample PDF not found at {UNIT_PDF_PATH}"
+    gt = extract_unit_ground_truth(UNIT_PDF_PATH)
+
+    assert gt.period_date == "01/08/2026"
+    assert gt.unit_code == "B-504"
+    assert gt.alicuota_total == pytest.approx(0.16736)
+    assert gt.last_payment_date == "31/08/2026"
+    assert gt.last_payment_amount == 125204
+    assert gt.declared_dept_subtotal == 108776
+    assert gt.declared_consumo_subtotal == 14189
+    assert gt.declared_recargos_subtotal == 0
+    assert gt.declared_total_month == 125465
+
+
+def test_unit_validator_with_perfect_fixture():
+    """Verify that 504b_2026_08_expected.json passes all 5 validation rules."""
+    with open(UNIT_FIXTURE_PATH, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    report = UnitBillReport.model_validate(data)
+    gt = extract_unit_ground_truth(UNIT_PDF_PATH)
+
+    result = validate_unit_bill(report, gt)
+    assert result.is_valid is True
+    assert result.errors == []
+    assert result.calculated_dept_subtotal == 108776
+    assert result.calculated_consumo_subtotal == 14189
+    assert result.calculated_recargos_subtotal == 0
+    assert result.calculated_unit_subtotal == 2500
+    assert result.calculated_total_month == 125465
+
+
+def test_unit_validator_detects_missing_concept_and_total_mismatch():
+    """Verify omitting a concept row triggers surgical errors on Tabla Conceptos and Total del mes."""
+    with open(UNIT_FIXTURE_PATH, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    # Drop Fondo Impermeabilizacion (10878)
+    data["concepts"] = [c for c in data["concepts"] if c["amount"] != 10878]
+    report = UnitBillReport.model_validate(data)
+    gt = extract_unit_ground_truth(UNIT_PDF_PATH)
+
+    result = validate_unit_bill(report, gt)
+    assert result.is_valid is False
+    assert any("[Tabla Conceptos]" in err and "-10,878 CLP" in err for err in result.errors)
+    assert any("[Total del mes]" in err and "-10,878 CLP" in err for err in result.errors)
+
+
+def test_unit_validator_detects_meter_reading_delta_mismatch():
+    """Verify meter reading arithmetic mismatch is caught in Tabla Consumos Generales."""
+    with open(UNIT_FIXTURE_PATH, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    data["consumptions"][0]["consumption"] = 2.7013
+    report = UnitBillReport.model_validate(data)
+    gt = extract_unit_ground_truth(UNIT_PDF_PATH)
+
+    result = validate_unit_bill(report, gt)
+    assert result.is_valid is False
+    assert any("Meter reading delta mismatch for 'Torre B'" in err for err in result.errors)
+

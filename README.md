@@ -1,11 +1,13 @@
 # Chilean Condominium Expense Reports Pipeline
 
-An autonomous, self-healing pipeline for extracting, validating, and persistently storing Chilean building expense reports (*"Informe Gastos Comunes"*).
+An autonomous, self-healing pipeline for extracting, validating, and persistently storing Chilean condominium financial documents across two complementary domains:
+* **`general` (*"Informe Gastos Comunes"*)**: Building-wide monthly operational and reserve fund expense reports.
+* **`unit` (*"Nota de Cobro"*)**: Individual apartment billing statements detailing unit proration (*alícuota*), billed concepts, metered utility readings (*agua caliente*, *calefacción*), and unit-specific charges/fines.
 
 This repository implements **Phase 1**, **Phase 2**, and **Phase 3** of the project roadmap:
-* **Phase 1 (PDF Extractor & Cross-Validation)**: LangGraph state machine utilizing Google Gemini multimodal vision, deterministic integer financial math validation, and self-healing error correction loops.
-* **Phase 2 (Storage Layer & Spool Sync)**: Persistent FastAPI backend service and normalized 3NF SQLite database with UUIDv7 primary keys, automatic duplicate overwrites (upserts), and resilient cloud spooling.
-* **Phase 3 (Analytics & Plotting Engine)**: Autonomous LangGraph SQL-and-Matplotlib analytical agent featuring multi-analysis orchestration (1–3 SQL queries per request for MoM, YoY, and category variance), mandatory `[Mes Año]` period citations, a two-hop variance analysis loop, 3-layer schema privacy defense, strict HTTP-only Data Gateway isolation (zero direct DB access), and an offline circuit breaker.
+* **Phase 1 (Dual-Domain PDF Extractors, Cross-Validation & Input Watcher)**: Dedicated LangGraph state machines utilizing Google Gemini multimodal vision for both `general` building reports (3-tier integer validation: `operational_total`, `fondos_total`, `grand_total`) and `unit` apartment bills (5-point deterministic integer validation: concepts table sum, hot water & heating utility cross-checks, unit charges sum, and `total_to_pay_amount` balance check), self-healing error correction loops, and zero-cost folder-routed batch/watch processing (`data/input/general/` and `data/input/unit/`).
+* **Phase 2 (Storage Layer & Domain-Partitioned Spool Sync)**: Persistent FastAPI backend service and normalized 3NF SQLite database (`expenses.db`) storing building-wide reports (`expense_reports`, `expense_sections`, `expense_items`) alongside a 4-table unit billing schema (`unit_bills`, `unit_bill_concepts`, `unit_bill_consumptions`, `unit_bill_charges`) linked via `period_date` (`YYYY-MM-01`), with UUIDv7 primary keys, atomic duplicate overwrites (upserts), and resilient domain-partitioned cloud spooling (`data/output/{general,unit}/`).
+* **Phase 3 (Analytics & Plotting Engine)**: Autonomous LangGraph SQL-and-Matplotlib analytical agent featuring multi-analysis orchestration (1–3 SQL queries per request for MoM, YoY, and category variance), mandatory `[Mes Año]` period citations, a two-hop variance analysis loop, 3-layer schema privacy defense, strict HTTP-only Data Gateway isolation (whitelisting both building-wide and unit-level tables with zero direct DB access), and an offline circuit breaker.
 
 ---
 
@@ -14,20 +16,21 @@ This repository implements **Phase 1**, **Phase 2**, and **Phase 3** of the proj
 ```
                                       PHASE 1                                                PHASE 2
 ┌───────────────────────┐    ┌────────────────────────────────────────┐             ┌─────────────────────────┐
-│                       │    │        LangGraph Extractor             │             │     FastAPI Backend     │
-│   PDF Expense Report  │───▶│  • Gemini Multimodal Vision            │             │  • REST API & Gateway   │
-│ (examples/2026-9.pdf) │    │  • Deterministic integer CLP validator │             │  • Lifespan management  │
-│                       │    │  • Self-healing retry feedback loop    │             │  • Duplicate detection  │
-└───────────────────────┘    └──────────────────┬─────────────────────┘             └────────────┬────────────┘
-                                                │                                                │
-                                                ▼                                                ▼
+│  PDF Financial Docs   │    │       LangGraph Dual Extractors        │             │     FastAPI Backend     │
+│  • Single PDF CLI     │───▶│  • General: Operational vs. Fondos     │             │  • /api/v1/reports      │
+│    (--type general|   │    │    + 3-tier integer CLP validator      │             │  • /api/v1/unit-bills   │
+│     unit)             │    │  • Unit: Concepts, Metered Utilities   │             │  • Lifespan & Upserts   │
+│  • data/input/ Watch  │    │    & Charges + 5-point CLP validator   │             └────────────┬────────────┘
+│    ├─ general/        │    └──────────────────┬─────────────────────┘                          │
+│    └─ unit/           │                       │                                                │
+└───────────────────────┘                       ▼                                                ▼
                                     ┌───────────────────────┐      HTTP Ingestion   ┌─────────────────────────┐
-                                    │      Spool Queue      │──────────────────────▶│     SQLite Database     │
-                                    │  • pending/ (offline) │                       │   (data/storage/        │
-                                    │  • synced/  (online)  │   HTTP Data Gateway   │      expenses.db)       │
-                                    │  • failed/  (dead)    │◀──────────────────────│  • 3NF relational schema│
-                                    └───────────────────────┘          │            └─────────────────────────┘
-                                                                       ▼
+                                    │   Spool Queues        │──────────────────────▶│     SQLite Database     │
+                                    │ data/output/{domain}/ │                       │   (data/storage/        │
+                                    │  • pending/ (offline) │   HTTP Data Gateway   │      expenses.db)       │
+                                    │  • synced/  (online)  │◀──────────────────────│  • Macro: expense_*     │
+                                    │  • failed/  (dead)    │          │            │  • Micro: unit_bill*    │
+                                    └───────────────────────┘          ▼            └─────────────────────────┘
                                                             ┌───────────────────────┐
                                                             │        PHASE 3        │
                                                             │  Data Analyst Agent   │
@@ -119,46 +122,61 @@ Interactive API documentation will be accessible at:
 
 ---
 
-### Step 2: Extract a PDF Expense Report
+### Step 2: Extract PDF Documents (Single File, Batch, or Folder Watcher)
 
-With the backend running, process a sample PDF report from `examples/`:
+With the backend running, you can extract a single PDF (`general` building report or `unit` apartment bill) or automate batch/watch processing from `data/input/general/` and `data/input/unit/`:
 
 ```bash
+# Option A1: Extract a single building-wide report ("Informe Gastos Comunes", default --type general)
 python -m data_extractor.cli examples/2026-9.pdf
+
+# Option A2: Extract a single individual apartment bill ("Nota de Cobro", --type unit)
+python -m data_extractor.cli examples/504b-2026-08.pdf --type unit
+
+# Option B: One-shot batch process all PDFs in data/input/general/ and data/input/unit/
+python -m data_extractor.cli --process-input
+
+# Option C: Continuously watch data/input/general/ and data/input/unit/ for new PDFs
+python -m data_extractor.cli --watch --interval 5
 ```
 
 **What happens:**
-1. The LangGraph workflow extracts the statement data with Gemini multimodal vision.
-2. The validator calculates integer subtotals deterministically and compares them against declared sums.
-3. If totals match, the extractor directly posts the report to the backend (`POST /api/v1/reports`).
-4. The output is archived in `data/output/synced/2026-9.json`.
-5. Telemetry (model used, latency, retry counts) is printed to stdout.
+1. **Domain-Specific Extraction**:
+   - **`general` workflow**: Extracts operational categories (`expense_type: "operational"`) and reserve funds/surcharges (`general_topic: "Fondos"`, `expense_type: "fondos"`) with Gemini multimodal vision.
+   - **`unit` workflow**: Extracts header metadata (`unit_code`, `period`, `alicuota_total`, `last_payment_date`, `last_payment_amount`, `total_to_pay_amount`) and the 3 core tables (*Conceptos*, *Consumos Generales*, and *Gastos por Unidad*).
+2. **Deterministic Integer Validation & Self-Healing**:
+   - **`general` validator**: Verifies 3-tier integer arithmetic (`operational_total`, `fondos_total`, and `grand_total`) against the PDF summary table (`TOTAL GASTOS COMUNES` and `TOTAL`).
+   - **`unit` validator**: Verifies 5 deterministic rules (concepts table sum vs. `total_a_pagar_tabla_conceptos`, `AGUA CALIENTE` & `CALEFACCION` concept rows vs. metered utility totals, unit charges sum vs. `total_cargos_unidad`, and header `total_to_pay_amount` vs. sum of concepts). Any discrepancy triggers surgical retry prompts (up to `MAX_RETRIES=2`).
+3. **Persistence & Spooling**: Validated payloads are posted directly to the backend (`POST /api/v1/reports` or `POST /api/v1/unit-bills`) and archived in `data/output/{general,unit}/synced/` (or staged in `data/output/{general,unit}/pending/` if the backend is offline).
+4. **Input Lifecycle Management**: When using `--process-input` or `--watch`, validated source PDFs in `data/input/{general,unit}/` are moved to `processed/`, while unrecoverable PDFs are moved to `failed/`.
+5. **Telemetry**: Model used, latency, and retry counts are printed to stdout.
 
 ---
 
 ### Step 3: Test Resilient Spooling (Offline Mode & Batch Sync)
 
-If the backend service is temporarily offline, the extractor gracefully stages files rather than failing:
+If the backend service is temporarily offline, the extractor gracefully stages files in domain-specific pending queues rather than failing:
 
 1. **Simulate Offline Ingestion:**
-   Stop the backend server, then extract another report:
+   Stop the backend server, then extract a building report or unit bill:
    ```bash
    python -m data_extractor.cli examples/2026-8.pdf
+   python -m data_extractor.cli examples/504b-2026-08.pdf --type unit
    ```
-   The report will be staged inside `data/output/pending/2026-8.json`.
+   The extracted JSON payloads will be staged inside `data/output/general/pending/2026-8.json` and `data/output/unit/pending/504b-2026-08.json`.
 
 2. **Check Queue Status:**
    ```bash
    python -m data_extractor.cli --status
    ```
-   Shows pending, synced, and failed file counts.
+   Shows pending, synced, and failed file counts across both `general` and `unit` queues.
 
-3. **Reconcile Pending Reports:**
+3. **Reconcile Pending Documents:**
    Restart the backend service, then trigger batch reconciliation:
    ```bash
    python -m data_extractor.cli --sync
    ```
-   All files in `pending/` are automatically ingested into the database and moved to `synced/`.
+   All files in `data/output/general/pending/` and `data/output/unit/pending/` are automatically ingested into their respective SQLite tables and moved to `synced/`.
 
 ---
 
@@ -185,35 +203,43 @@ curl -s -X POST http://localhost:8000/api/v1/analytics/query \
 
 #### Option B: Via Persistence REST API
 ```bash
-# List all ingested reports
+# List all ingested building-wide reports
 curl -s http://localhost:8000/api/v1/reports | jq .
 
-# Fetch detailed report hierarchy by date (YYYY-MM-01)
-curl -s http://localhost:8000/api/v1/reports/period/2026-10-01 | jq .
+# Fetch detailed building report hierarchy by date (YYYY-MM-01)
+curl -s http://localhost:8000/api/v1/reports/period/2026-09-01 | jq .
+
+# List ingested unit bills (optionally filtered by unit_code or period_date)
+curl -s "http://localhost:8000/api/v1/unit-bills?unit_code=B-504" | jq .
 ```
 
 #### Option C: Directly via SQLite CLI
 > **Note:** Run queries on a single line to avoid Bash backslash whitespace issues.
 
 ```bash
-# View all stored monthly reports
-sqlite3 -header -column data/storage/expenses.db "SELECT id, period_date, calculated_grand_total, created_at FROM expense_reports;"
+# View all stored monthly building reports with operational, reserve funds (fondos), and grand totals
+sqlite3 -header -column data/storage/expenses.db "SELECT id, period_date, operational_total, fondos_total, calculated_grand_total, created_at FROM expense_reports;"
 
-# View category breakdown with deterministic subtotals
-sqlite3 -header -column data/storage/expenses.db "SELECT category_name, calculated_subtotal FROM expense_sections;"
+# View category breakdown with expense_type ('operational' vs 'fondos') and deterministic subtotals
+sqlite3 -header -column data/storage/expenses.db "SELECT category_name, expense_type, calculated_subtotal FROM expense_sections;"
 
-# View expense items with lowercase normalized names for historical trend analysis
-sqlite3 -header -column data/storage/expenses.db "SELECT name, normalized_name, amount FROM expense_items LIMIT 10;"
+# View individual apartment bills (unit_code, period_date, alicuota_total, and total_to_pay)
+sqlite3 -header -column data/storage/expenses.db "SELECT id, unit_code, period_date, alicuota_total, total_to_pay, calculated_concepts_total, calculated_charges_total FROM unit_bills;"
+
+# View billed concepts, metered utilities, and unit-specific charges/fines
+sqlite3 -header -column data/storage/expenses.db "SELECT concept_name, normalized_name, detail, amount FROM unit_bill_concepts;"
+sqlite3 -header -column data/storage/expenses.db "SELECT service_name, consumption_measured, consumption_billed, unit_of_measure, total_amount FROM unit_bill_consumptions;"
+sqlite3 -header -column data/storage/expenses.db "SELECT charge_type, description, amount FROM unit_bill_charges;"
 ```
 
 ---
 
 ## 🧪 Running the Test Suite
 
-The test suite contains 85 offline automated tests (covering Phase 1 extraction, Phase 2 persistence/spooling, and Phase 3 analytics/multi-query/isolation) that execute in seconds without calling the live Gemini API:
+The test suite contains 98 offline automated tests (covering Phase 1 `general` and `unit` extraction/validation/input watcher, Phase 2 persistence/spooling across both domains, and Phase 3 analytics/multi-query/isolation) that execute in seconds without calling the live Gemini API:
 
 ```bash
-# Run all 85 tests
+# Run all 98 tests
 python -m pytest -v
 
 # Run Phase 1 & Phase 3 workflow/unit tests
@@ -233,13 +259,17 @@ python -m pytest --cov=data_extractor --cov=analytics --cov=backend/app -v
 | Method | Endpoint | Description |
 |:---|:---|:---|
 | `GET` | `/health` | Service and SQLite database connectivity status |
-| `POST` | `/api/v1/reports` | Ingest new report or overwrite existing month atomically |
-| `GET` | `/api/v1/reports` | List all reports with summary totals (sorted by date DESC) |
-| `GET` | `/api/v1/reports/{id}` | Get report hierarchy by UUIDv7 ID |
-| `GET` | `/api/v1/reports/period/{date}` | Get report hierarchy by period date (`YYYY-MM-01`) |
-| `DELETE` | `/api/v1/reports/{id}` | Delete report (cascades to all sections and items) |
-| `GET` | `/api/v1/sync/status` | Telemetry on pending, synced, and failed queues |
-| `POST` | `/api/v1/sync/pending` | Batch process and reconcile all files in pending spool |
+| `POST` | `/api/v1/reports` | Ingest new building report or overwrite existing month atomically |
+| `GET` | `/api/v1/reports` | List all building reports with summary totals (sorted by date DESC) |
+| `GET` | `/api/v1/reports/{id}` | Get building report hierarchy by UUIDv7 ID |
+| `GET` | `/api/v1/reports/period/{date}` | Get building report hierarchy by period date (`YYYY-MM-01`) |
+| `DELETE` | `/api/v1/reports/{id}` | Delete building report (cascades to all sections and items) |
+| `POST` | `/api/v1/unit-bills` | Ingest new apartment bill or overwrite existing `(unit_code, period_date)` atomically |
+| `GET` | `/api/v1/unit-bills` | List apartment bills (optional `?unit_code=` and `?period_date=` filters) |
+| `GET` | `/api/v1/unit-bills/{bill_id}` | Get full apartment bill hierarchy (concepts, consumptions, charges) by UUIDv7 ID |
+| `DELETE` | `/api/v1/unit-bills/{bill_id}` | Delete apartment bill (cascades to concepts, consumptions, and charges) |
+| `GET` | `/api/v1/sync/status` | Telemetry on pending, synced, and failed queues across `general` and `unit` domains |
+| `POST` | `/api/v1/sync/pending` | Batch process and reconcile all files in `general` and `unit` pending spools |
 | `POST` | `/api/v1/analytics/execute-query` | Read-only SQLite Data Gateway Proxy (table whitelist, 3s timeout, 500-row cap) |
 | `POST` | `/api/v1/analytics/query` | High-level natural language analytics & charting endpoint |
 
@@ -263,28 +293,32 @@ data-analyst/
 ├── backend/                    # Phase 2: Persistence & Data Gateway service
 │   ├── app/
 │   │   ├── main.py             # FastAPI entrypoint & lifespan
-│   │   ├── models.py           # SQLAlchemy 3NF models (UUIDv7, cascading delete)
-│   │   ├── repository.py       # Atomic ingestion, upsert & query logic
-│   │   ├── routes/             # API routes (reports.py, sync.py, analytics.py)
+│   │   ├── models.py           # SQLAlchemy 3NF models (macro expense_* & micro unit_bill* tables)
+│   │   ├── repository.py       # Atomic ingestion, upsert & query logic for reports and unit bills
+│   │   ├── routes/             # API routes (reports.py, unit_bills.py, sync.py, analytics.py)
 │   │   └── schemas.py          # Pydantic validation schemas
 │   └── tests/                  # Integration tests for API, Data Gateway, and database
 ├── data/
-│   ├── input/                  # Incoming PDF files
+│   ├── input/                  # Domain-partitioned incoming PDF folders for --process-input / --watch
+│   │   ├── general/            # Building-wide "Informe Gastos Comunes" PDFs (processed/ & failed/)
+│   │   └── unit/               # Apartment-level "Nota de Cobro" PDFs (processed/ & failed/)
 │   ├── output/
 │   │   ├── charts/             # Rendered analytical PNG charts
-│   │   ├── pending/            # Staged reports waiting for DB sync
-│   │   ├── synced/             # Successfully committed reports
-│   │   └── failed/             # Dead-letter queue for rejected reports
+│   │   ├── general/            # Spool queues for building reports (pending/, synced/, failed/)
+│   │   └── unit/               # Spool queues for apartment bills (pending/, synced/, failed/)
 │   └── storage/
 │       └── expenses.db         # SQLite persistent database (WAL mode)
-├── data_extractor/             # Phase 1: LangGraph PDF extraction
-│   ├── cli.py                  # CLI tool (`--sync`, `--status`, PDF extraction)
-│   ├── config.py               # Settings & environment configuration
-│   ├── extractor.py            # Gemini multimodal invocation & fallback
-│   ├── models.py               # Pydantic domain models
-│   ├── validator.py            # Deterministic integer arithmetic checker
-│   └── workflow.py             # LangGraph state machine & spool router
-├── examples/                   # Real Chilean expense reports (PDF format)
+├── data_extractor/             # Phase 1: LangGraph PDF extractors & input watcher
+│   ├── cli.py                  # CLI tool (`--type {general,unit}`, `--process-input`, `--watch`, `--sync`, `--status`)
+│   ├── config.py               # Settings & domain directory path helpers
+│   ├── extractor.py            # Gemini multimodal extractors (`GeminiExtractor` & `UnitBillExtractor`)
+│   ├── ground_truth.py         # Deterministic PDF text parser for 3-tier ground-truth totals
+│   ├── models.py               # Pydantic domain models (`ExpenseReport`, `UnitBillReport`, etc.)
+│   ├── prompts/                # Externalized system & retry prompt templates (general & unit)
+│   ├── validator.py            # Deterministic integer arithmetic checkers (general 3-tier & unit 5-point)
+│   └── workflow.py             # LangGraph state machines (`run_workflow` & `run_unit_workflow`) & spool routers
+├── examples/                   # Sample Chilean condominium PDFs (building reports & unit bills)
 └── tests/                      # Phase 1 & Phase 3 unit and integration tests
 ```
+
 

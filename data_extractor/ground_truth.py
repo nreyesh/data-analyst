@@ -213,3 +213,136 @@ def extract_ground_truth(
     result.section_totals = normalized_totals
 
     return result
+
+
+@dataclass
+class UnitGroundTruthData:
+    """Declared subtotals, header metadata, and totals extracted from a unit bill ('Nota de Cobro') PDF."""
+
+    period_date: str | None = None
+    unit_code: str | None = None
+    alicuota_total: float | None = None
+    last_payment_date: str | None = None
+    last_payment_amount: int | None = None
+    declared_dept_subtotal: int | None = None
+    declared_consumo_subtotal: int | None = None
+    declared_recargos_subtotal: int | None = None
+    declared_total_month: int | None = None
+
+
+def _parse_clp_match(match: re.Match) -> int:
+    """Parse signed CLP integer from regex groups (sign1, sign2, digits)."""
+    sign = -1 if (match.group(1) == "-" or match.group(2) == "-") else 1
+    return sign * int(match.group(3).replace(".", ""))
+
+
+def extract_unit_ground_truth(
+    pdf_source: str | Path | bytes,
+) -> UnitGroundTruthData:
+    """Extract declared header fields, section subtotals, and monthly total from a digital unit bill PDF.
+
+    Args:
+        pdf_source: Path to the PDF file or raw PDF bytes.
+
+    Returns:
+        UnitGroundTruthData with extracted ground-truth anchors.
+    """
+    if isinstance(pdf_source, (str, Path)):
+        doc = fitz.open(str(pdf_source))
+    elif isinstance(pdf_source, bytes):
+        doc = fitz.open(stream=pdf_source, filetype="pdf")
+    else:
+        raise TypeError(f"Unsupported pdf_source type: {type(pdf_source)}")
+
+    try:
+        full_text = "\n".join(page.get_text() for page in doc)
+    finally:
+        doc.close()
+
+    result = UnitGroundTruthData()
+
+    # 1. Billing Period & Unit Code ("Nota de Cobro Agosto 2026   B-504")
+    m_header = re.search(
+        r"Nota\s+de\s+Cobro\s+([A-Za-z]+)\s+(\d{4})(?:[ \t]+([^\r\n]+))?",
+        full_text,
+        re.IGNORECASE,
+    )
+    if m_header:
+        month_name = m_header.group(1).lower().strip()
+        year = int(m_header.group(2))
+        month_num = SPANISH_MONTH_MAP.get(month_name)
+        if month_num is not None:
+            result.period_date = f"01/{month_num:02d}/{year:04d}"
+        if m_header.group(3):
+            unit_raw = m_header.group(3).strip()
+            if unit_raw:
+                result.unit_code = unit_raw
+
+    # 2. Alícuota Total ("Alícuota Total \n 0,16736 %")
+    m_alicuota = re.search(
+        r"Al[ií]cuota\s+Total\s*[\r\n]+\s*([\d,\.]+)\s*%",
+        full_text,
+        re.IGNORECASE,
+    )
+    if m_alicuota:
+        raw_num = m_alicuota.group(1).strip().replace(".", "").replace(",", ".")
+        result.alicuota_total = float(raw_num)
+
+    # 3. Fecha último Pago ("Fecha ultimo Pago \n 31-08-2026")
+    m_last_date = re.search(
+        r"Fecha\s+[uú]ltimo\s+Pago\s*[\r\n]+\s*(\d{2})[-/](\d{2})[-/](\d{4})",
+        full_text,
+        re.IGNORECASE,
+    )
+    if m_last_date:
+        result.last_payment_date = (
+            f"{m_last_date.group(1)}/{m_last_date.group(2)}/{m_last_date.group(3)}"
+        )
+
+    # 4. Monto último Pago ("Monto ultimo Pago \n $ 125.204")
+    m_last_amt = re.search(
+        r"Monto\s+[uú]ltimo\s+Pago\s*[\r\n]+\s*(-?)\$\s*(-?)([\d\.]+)",
+        full_text,
+        re.IGNORECASE,
+    )
+    if m_last_amt:
+        result.last_payment_amount = _parse_clp_match(m_last_amt)
+
+    # 5. Subtotal Departamento
+    m_dept_sub = re.search(
+        r"Subtotal\s+Departamento\s*[\r\n]+\s*(-?)\$\s*(-?)([\d\.]+)",
+        full_text,
+        re.IGNORECASE,
+    )
+    if m_dept_sub:
+        result.declared_dept_subtotal = _parse_clp_match(m_dept_sub)
+
+    # 6. Subtotal Consumo
+    m_consumo_sub = re.search(
+        r"Subtotal\s+Consumo\s*[\r\n]+\s*(-?)\$\s*(-?)([\d\.]+)",
+        full_text,
+        re.IGNORECASE,
+    )
+    if m_consumo_sub:
+        result.declared_consumo_subtotal = _parse_clp_match(m_consumo_sub)
+
+    # 7. Subtotal Recargos
+    m_recargos_sub = re.search(
+        r"Subtotal\s+Recargos\s*[\r\n]+\s*(-?)\$\s*(-?)([\d\.]+)",
+        full_text,
+        re.IGNORECASE,
+    )
+    if m_recargos_sub:
+        result.declared_recargos_subtotal = _parse_clp_match(m_recargos_sub)
+
+    # 8. Total del mes
+    m_total_mes = re.search(
+        r"Total\s+del\s+mes\s*[\r\n]+\s*(-?)\$\s*(-?)([\d\.]+)",
+        full_text,
+        re.IGNORECASE,
+    )
+    if m_total_mes:
+        result.declared_total_month = _parse_clp_match(m_total_mes)
+
+    return result
+

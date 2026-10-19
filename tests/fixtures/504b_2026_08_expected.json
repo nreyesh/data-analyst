@@ -1,0 +1,41 @@
+{
+  "issue_date": "01/08/2026",
+  "unit_code": "B-504",
+  "alicuota_total": 0.16736,
+  "last_payment_date": "31/08/2026",
+  "last_payment_amount": 125204,
+  "concepts": [
+    {
+      "concept": "Gasto Común",
+      "detail": "0,16736 %",
+      "amount": 93236
+    },
+    {
+      "concept": "Fondo de Reserva 5%",
+      "detail": "5,00 %",
+      "amount": 4662
+    },
+    {
+      "concept": "Fondo Impermeabilizacion",
+      "detail": null,
+      "amount": 10878
+    }
+  ],
+  "consumptions": [
+    {
+      "item_name": "Torre B",
+      "previous_reading": 100.581,
+      "current_reading": 102.2823,
+      "consumption": 1.7013,
+      "unit_rate": 8340.24,
+      "total": 14189
+    }
+  ],
+  "unit_charges": [
+    {
+      "charge_name": "Fondo de Indemnizacion",
+      "charge_type": "fixed_charge",
+      "amount": 2500
+    }
+  ]
+}

@@ -83,35 +83,99 @@ class Settings(BaseSettings):
         description="Base URL for the persistence backend service",
     )
 
+    def get_input_domain_dir(self, doc_type: str = "general") -> Path:
+        """Return input drop directory for a document domain ('general' or 'unit')."""
+        return self.input_dir / doc_type
+
+    def get_input_processed_dir(self, doc_type: str = "general") -> Path:
+        """Return input processed archive directory for a document domain."""
+        return self.input_dir / doc_type / "processed"
+
+    def get_input_failed_dir(self, doc_type: str = "general") -> Path:
+        """Return input failed quarantine directory for a document domain."""
+        return self.input_dir / doc_type / "failed"
+
+    def get_pending_dir(self, doc_type: str = "general") -> Path:
+        """Return output pending spool directory for a document domain."""
+        return self.output_dir / doc_type / "pending"
+
+    def get_synced_dir(self, doc_type: str = "general") -> Path:
+        """Return output synced archive directory for a document domain."""
+        return self.output_dir / doc_type / "synced"
+
+    def get_failed_dir(self, doc_type: str = "general") -> Path:
+        """Return output failed dead-letter directory for a document domain."""
+        return self.output_dir / doc_type / "failed"
+
+    @property
+    def general_input_dir(self) -> Path:
+        """Incoming drop directory for general building expense reports."""
+        return self.get_input_domain_dir("general")
+
+    @property
+    def unit_input_dir(self) -> Path:
+        """Incoming drop directory for individual unit billing statements."""
+        return self.get_input_domain_dir("unit")
+
     @property
     def input_processed_dir(self) -> Path:
-        """Directory archiving raw PDFs that passed extraction and validation."""
-        return self.input_dir / "processed"
+        """Directory archiving raw general PDFs that passed extraction and validation."""
+        return self.get_input_processed_dir("general")
 
     @property
     def input_failed_dir(self) -> Path:
-        """Quarantine directory for raw PDFs that failed extraction or validation."""
-        return self.input_dir / "failed"
+        """Quarantine directory for raw general PDFs that failed extraction or validation."""
+        return self.get_input_failed_dir("general")
+
+    @property
+    def unit_input_processed_dir(self) -> Path:
+        """Directory archiving raw unit PDFs that passed extraction and validation."""
+        return self.get_input_processed_dir("unit")
+
+    @property
+    def unit_input_failed_dir(self) -> Path:
+        """Quarantine directory for raw unit PDFs that failed extraction or validation."""
+        return self.get_input_failed_dir("unit")
 
     @property
     def pending_dir(self) -> Path:
-        """Directory staging validated reports awaiting database sync."""
-        return self.output_dir / "pending"
+        """Directory staging validated general reports awaiting database sync."""
+        return self.get_pending_dir("general")
 
     @property
     def synced_dir(self) -> Path:
-        """Directory archiving reports successfully committed to the database."""
-        return self.output_dir / "synced"
+        """Directory archiving general reports successfully committed to the database."""
+        return self.get_synced_dir("general")
 
     @property
     def failed_dir(self) -> Path:
-        """Dead-letter directory isolating reports rejected by the backend."""
-        return self.output_dir / "failed"
+        """Dead-letter directory isolating general reports rejected by the backend."""
+        return self.get_failed_dir("general")
+
+    @property
+    def unit_pending_dir(self) -> Path:
+        """Directory staging validated unit bills awaiting database sync."""
+        return self.get_pending_dir("unit")
+
+    @property
+    def unit_synced_dir(self) -> Path:
+        """Directory archiving unit bills successfully committed to the database."""
+        return self.get_synced_dir("unit")
+
+    @property
+    def unit_failed_dir(self) -> Path:
+        """Dead-letter directory isolating unit bills rejected by the backend."""
+        return self.get_failed_dir("unit")
 
     @property
     def backend_reports_url(self) -> str:
-        """Direct report ingestion endpoint URL."""
+        """Direct general report ingestion endpoint URL."""
         return f"{self.backend_base_url.rstrip('/')}/api/v1/reports"
+
+    @property
+    def backend_unit_bills_url(self) -> str:
+        """Direct unit bill ingestion endpoint URL."""
+        return f"{self.backend_base_url.rstrip('/')}/api/v1/unit-bills"
 
     @property
     def backend_sync_url(self) -> str:
@@ -124,17 +188,24 @@ class Settings(BaseSettings):
         return f"{self.backend_base_url.rstrip('/')}/api/v1/sync/status"
 
     def ensure_directories(self) -> None:
-        """Create standard data, storage, input lifecycle, and output spool directories if they do not exist."""
+        """Create standard data, storage, input lifecycle, and output spool directories for general and unit domains."""
         for path in (
             self.input_dir,
-            self.input_processed_dir,
-            self.input_failed_dir,
             self.output_dir,
             self.storage_dir,
             self.prompts_dir,
+            self.general_input_dir,
+            self.input_processed_dir,
+            self.input_failed_dir,
+            self.unit_input_dir,
+            self.unit_input_processed_dir,
+            self.unit_input_failed_dir,
             self.pending_dir,
             self.synced_dir,
             self.failed_dir,
+            self.unit_pending_dir,
+            self.unit_synced_dir,
+            self.unit_failed_dir,
         ):
             path.mkdir(parents=True, exist_ok=True)
 

@@ -69,3 +69,29 @@ def normalize_text(text: str) -> str:
 def normalize_item_name(name: str) -> str:
     """Normalize item name to stripped lowercase with accents removed for cross-month analytical queries."""
     return normalize_text(name)
+
+
+def parse_full_date(date_str: str | None) -> str | None:
+    """Parse 'DD/MM/YYYY' or 'DD-MM-YYYY' into ISO 'YYYY-MM-DD'.
+
+    Raises:
+        ValueError: If date_str is non-empty and not in 'DD/MM/YYYY' format.
+    """
+    if date_str is None:
+        return None
+    cleaned = date_str.strip().replace("-", "/")
+    if not cleaned:
+        return None
+    match = re.match(r"^(\d{2})/(\d{2})/(\d{4})$", cleaned)
+    if not match:
+        raise ValueError(
+            f"Invalid date format: {date_str!r}. Must strictly be 'DD/MM/YYYY'."
+        )
+    day_str, month_str, year_str = match.groups()
+    day = int(day_str)
+    month = int(month_str)
+    year = int(year_str)
+    if not (1 <= month <= 12) or not (1 <= day <= 31):
+        raise ValueError(f"Invalid calendar date values in {date_str!r}")
+    return f"{year:04d}-{month:02d}-{day:02d}"
+

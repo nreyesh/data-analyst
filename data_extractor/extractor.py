@@ -12,8 +12,8 @@ from google.genai import types
 from langsmith import traceable
 
 from data_extractor.config import get_settings
-from data_extractor.models import ExpenseReport, ExtractionMetadata
-from data_extractor.prompt_loader import load_system_prompt
+from data_extractor.models import ExpenseReport, ExtractionMetadata, UnitBillReport
+from data_extractor.prompt_loader import load_system_prompt, load_unit_system_prompt
 
 logger = logging.getLogger("data_extractor.extractor")
 
@@ -140,3 +140,118 @@ def extract_from_pdf(
         f"All configured extraction models failed. Attempted models: {candidate_models}. "
         f"Last error: {last_error}"
     ) from last_error
+
+
+@traceable(run_type="llm", name="gemini_extract_unit_from_pdf")
+def extract_unit_from_pdf(
+    pdf_source: str | Path | bytes,
+    client: genai.Client | None = None,
+    model: str | None = None,
+    feedback_prompt: str | None = None,
+) -> tuple[UnitBillReport, ExtractionMetadata]:
+    """Extract structured unit billing statement ('Nota de Cobro') from a PDF document with model failover.
+
+    Args:
+        pdf_source: File path or raw bytes of the PDF.
+        client: Optional pre-configured Gemini client.
+        model: Optional model override (defaults to settings.default_model).
+        feedback_prompt: Optional targeted error feedback for self-healing iteration.
+
+    Returns:
+        Tuple of (validated UnitBillReport, ExtractionMetadata telemetry).
+    """
+    settings = get_settings()
+    if client is None:
+        client = get_gemini_client()
+
+    primary_model = model or settings.default_model
+    candidate_models = settings.get_candidate_models(primary_override=primary_model)
+
+    # 1. Load PDF bytes
+    if isinstance(pdf_source, (str, Path)):
+        pdf_path = Path(pdf_source)
+        if not pdf_path.exists():
+            raise FileNotFoundError(f"PDF file not found at {pdf_path}")
+        pdf_bytes = pdf_path.read_bytes()
+    elif isinstance(pdf_source, bytes):
+        pdf_bytes = pdf_source
+    else:
+        raise TypeError(f"Unsupported pdf_source type: {type(pdf_source)}")
+
+    # 2. Build multimodal contents
+    pdf_part = types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf")
+    system_instruction = load_unit_system_prompt()
+
+    user_message = (
+        "Please extract the unit billing statement ('Nota de Cobro') metadata and all three tables "
+        "(Tabla Conceptos, Tabla Consumos Generales, and Tabla Gastos por Unidad). "
+        "Strictly adhere to the extraction rules, normalize issue_date to 01/MM/YYYY, "
+        "last_payment_date to DD/MM/YYYY, output CLP amounts as integers, and readings/rates/alicuota as floats."
+    )
+
+    contents: list[types.Part | str] = [pdf_part, user_message]
+
+    if feedback_prompt:
+        contents.append(
+            f"ATTENTION - PREVIOUS EXTRACTION ERRORS DETECTED:\n{feedback_prompt}"
+        )
+
+    # 3. Configure structured output schema
+    config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        response_schema=UnitBillReport,
+        system_instruction=system_instruction,
+        temperature=0.0,
+    )
+
+    # 4. Attempt extraction across model cascade
+    last_error: Exception | None = None
+    fallback_triggered = False
+    fallback_reason: str | None = None
+
+    for idx, current_model in enumerate(candidate_models):
+        if idx > 0:
+            fallback_triggered = True
+            fallback_reason = f"{type(last_error).__name__}: {last_error}"
+            logger.warning(
+                "Primary model '%s' failed (%s). Activating fallback model '%s'...",
+                candidate_models[0],
+                last_error,
+                current_model,
+            )
+
+        try:
+            start_time = time.perf_counter()
+            response = client.models.generate_content(
+                model=current_model,
+                contents=contents,
+                config=config,
+            )
+            latency = time.perf_counter() - start_time
+
+            if not response.text:
+                raise RuntimeError(
+                    f"Model '{current_model}' returned empty response text."
+                )
+
+            report = UnitBillReport.model_validate_json(response.text)
+
+            metadata = ExtractionMetadata(
+                model_used=current_model,
+                fallback_triggered=fallback_triggered,
+                fallback_reason=fallback_reason,
+                latency_seconds=round(latency, 2),
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            )
+
+            return report, metadata
+
+        except Exception as exc:
+            last_error = exc
+            logger.warning("Attempt with model '%s' failed: %s", current_model, exc)
+
+    raise RuntimeError(
+        f"All configured extraction models failed. Attempted models: {candidate_models}. "
+        f"Last error: {last_error}"
+    ) from last_error
+

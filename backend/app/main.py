@@ -14,6 +14,7 @@ from backend.app.database import init_db
 from backend.app.routes.analytics import router as analytics_router
 from backend.app.routes.reports import router as reports_router
 from backend.app.routes.sync import router as sync_router
+from backend.app.routes.unit_bills import router as unit_bills_router
 
 logger = logging.getLogger("backend.app")
 
@@ -61,6 +62,7 @@ def create_app() -> FastAPI:
 
     # Mount API routers
     app.include_router(reports_router, prefix="/api/v1")
+    app.include_router(unit_bills_router, prefix="/api/v1")
     app.include_router(sync_router, prefix="/api/v1")
     app.include_router(analytics_router, prefix="/api/v1")
 

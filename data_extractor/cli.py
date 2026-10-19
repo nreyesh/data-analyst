@@ -11,7 +11,7 @@ from pathlib import Path
 import requests
 
 from data_extractor.config import get_settings
-from data_extractor.workflow import run_workflow
+from data_extractor.workflow import run_unit_workflow, run_workflow
 
 
 def setup_cli_logging(verbose: bool = False) -> None:
@@ -43,10 +43,16 @@ def handle_status_command() -> int:
     except Exception:
         pass
 
-    # Fallback to local directory scan if backend is offline
-    pending_files = [f.name for f in settings.pending_dir.glob("*.json")]
-    synced_files = [f.name for f in settings.synced_dir.glob("*.json")]
-    failed_files = [f.name for f in settings.failed_dir.glob("*.json")]
+    # Fallback to local directory scan across general and unit domains if backend is offline
+    pending_files = [
+        f.name for f in settings.pending_dir.glob("*.json")
+    ] + [f"unit/{f.name}" for f in settings.unit_pending_dir.glob("*.json")]
+    synced_files = [
+        f.name for f in settings.synced_dir.glob("*.json")
+    ] + [f"unit/{f.name}" for f in settings.unit_synced_dir.glob("*.json")]
+    failed_files = [
+        f.name for f in settings.failed_dir.glob("*.json")
+    ] + [f"unit/{f.name}" for f in settings.unit_failed_dir.glob("*.json")]
 
     print(f"⚠️  Backend Service: {settings.backend_base_url} (OFFLINE - Local Spool Scan)")
     print(f"   • ⏳ Pending: {len(pending_files)} file(s) {pending_files}")
@@ -119,11 +125,25 @@ def _discover_incoming_pdfs(input_dir: Path) -> list[Path]:
     return pdfs
 
 
+def _discover_all_domain_pdfs() -> list[tuple[Path, str]]:
+    """Discover incoming PDFs across data/input/general/ (and top-level data/input/) and data/input/unit/."""
+    settings = get_settings()
+    discovered: list[tuple[Path, str]] = []
+    for pdf in _discover_incoming_pdfs(settings.general_input_dir):
+        discovered.append((pdf, "general"))
+    for pdf in _discover_incoming_pdfs(settings.input_dir):
+        discovered.append((pdf, "general"))
+    for pdf in _discover_incoming_pdfs(settings.unit_input_dir):
+        discovered.append((pdf, "unit"))
+    return discovered
+
+
 def process_single_input_pdf(
     pdf_path: Path,
     max_retries: int | None = None,
+    doc_type: str = "general",
 ) -> bool:
-    """Process a single PDF from data/input/ and move it to input/processed/ or input/failed/.
+    """Process a single PDF from data/input/<domain>/ and move it to processed/ or failed/.
 
     Returns:
         bool: True if extraction passed and PDF moved to processed/, False if moved to failed/.
@@ -131,12 +151,22 @@ def process_single_input_pdf(
     settings = get_settings()
     settings.ensure_directories()
 
-    print(f"\n📥 Ingesting incoming PDF: {pdf_path.name}")
+    processed_dir = settings.get_input_processed_dir(doc_type)
+    failed_dir = settings.get_input_failed_dir(doc_type)
+
+    print(f"\n📥 Ingesting incoming [{doc_type}] PDF: {pdf_path.name}")
     try:
-        result = run_workflow(
-            pdf_path=pdf_path,
-            max_retries=max_retries,
-        )
+        if doc_type == "unit":
+            result = run_unit_workflow(
+                pdf_path=pdf_path,
+                max_retries=max_retries,
+            )
+        else:
+            result = run_workflow(
+                pdf_path=pdf_path,
+                max_retries=max_retries,
+            )
+
         spool_status = result.get("_spool_status", "unknown")
         validation_failed = (
             result.get("_status") in ("FAILED_VALIDATION", "FAILED")
@@ -145,17 +175,17 @@ def process_single_input_pdf(
         )
 
         if not validation_failed and spool_status in ("synced", "pending"):
-            target_pdf = settings.input_processed_dir / pdf_path.name
+            target_pdf = processed_dir / pdf_path.name
             shutil.move(str(pdf_path), str(target_pdf))
             print(
-                f"✅ Processed '{pdf_path.name}' (spool={spool_status}) -> moved to {target_pdf}"
+                f"✅ Processed '{pdf_path.name}' (domain={doc_type}, spool={spool_status}) -> moved to {target_pdf}"
             )
             return True
         else:
-            target_pdf = settings.input_failed_dir / pdf_path.name
+            target_pdf = failed_dir / pdf_path.name
             shutil.move(str(pdf_path), str(target_pdf))
             print(
-                f"❌ Failed '{pdf_path.name}' (spool={spool_status}) -> moved to {target_pdf}",
+                f"❌ Failed '{pdf_path.name}' (domain={doc_type}, spool={spool_status}) -> moved to {target_pdf}",
                 file=sys.stderr,
             )
             return False
@@ -167,7 +197,7 @@ def process_single_input_pdf(
         )
         try:
             if pdf_path.exists():
-                target_pdf = settings.input_failed_dir / pdf_path.name
+                target_pdf = failed_dir / pdf_path.name
                 shutil.move(str(pdf_path), str(target_pdf))
                 print(f"📁 Quarantined '{pdf_path.name}' -> {target_pdf}", file=sys.stderr)
         except Exception as move_exc:
@@ -176,20 +206,22 @@ def process_single_input_pdf(
 
 
 def handle_process_input_command(max_retries: int | None = None) -> int:
-    """Scan data/input/*.pdf once and process all discovered PDFs."""
+    """Scan data/input/general/*.pdf and data/input/unit/*.pdf once and process all discovered PDFs."""
     settings = get_settings()
     settings.ensure_directories()
-    incoming = _discover_incoming_pdfs(settings.input_dir)
+    incoming = _discover_all_domain_pdfs()
 
     if not incoming:
-        print(f"📭 No incoming PDF files found in {settings.input_dir}")
+        print(
+            f"📭 No incoming PDF files found in {settings.general_input_dir} or {settings.unit_input_dir}"
+        )
         return 0
 
-    print(f"📂 Found {len(incoming)} PDF(s) in {settings.input_dir}...")
+    print(f"📂 Found {len(incoming)} PDF(s) across input domain folders...")
     succeeded = 0
     failed = 0
-    for pdf_path in incoming:
-        if process_single_input_pdf(pdf_path, max_retries=max_retries):
+    for pdf_path, doc_type in incoming:
+        if process_single_input_pdf(pdf_path, max_retries=max_retries, doc_type=doc_type):
             succeeded += 1
         else:
             failed += 1
@@ -204,17 +236,21 @@ def handle_watch_command(
     max_retries: int | None = None,
     poll_seconds: float = 2.0,
 ) -> int:
-    """Continuously monitor data/input/ for new PDF files and process them automatically."""
+    """Continuously monitor data/input/general/ and data/input/unit/ for new PDF files."""
     settings = get_settings()
     settings.ensure_directories()
-    print(f"👀 Watching {settings.input_dir} for incoming PDFs (Ctrl+C to stop)...")
+    print(
+        f"👀 Watching {settings.general_input_dir} and {settings.unit_input_dir} for incoming PDFs (Ctrl+C to stop)..."
+    )
 
     try:
         while True:
-            incoming = _discover_incoming_pdfs(settings.input_dir)
-            for pdf_path in incoming:
+            incoming = _discover_all_domain_pdfs()
+            for pdf_path, doc_type in incoming:
                 if _wait_for_file_stability(pdf_path):
-                    process_single_input_pdf(pdf_path, max_retries=max_retries)
+                    process_single_input_pdf(
+                        pdf_path, max_retries=max_retries, doc_type=doc_type
+                    )
             time.sleep(poll_seconds)
     except KeyboardInterrupt:
         print("\n🛑 Input folder watcher stopped.")
@@ -222,10 +258,10 @@ def handle_watch_command(
 
 
 def main(argv: list[str] | None = None) -> None:
-    """CLI entry point for extracting, validating, and synchronizing expense reports."""
+    """CLI entry point for extracting, validating, and synchronizing expense reports and unit bills."""
     parser = argparse.ArgumentParser(
         prog="data-extractor",
-        description="Extract and validate Chilean building expense reports (Informe Gastos Comunes) with cloud spool sync.",
+        description="Extract and validate Chilean building expense reports (general) and unit bills (unit) with cloud spool sync.",
     )
 
     parser.add_argument(
@@ -233,12 +269,19 @@ def main(argv: list[str] | None = None) -> None:
         type=str,
         nargs="?",
         default=None,
-        help="Path to the PDF expense report (e.g. examples/2026-9.pdf)",
+        help="Path to the PDF document (e.g. examples/2026-9.pdf or examples/504b-2026-08.pdf)",
+    )
+    parser.add_argument(
+        "-t",
+        "--type",
+        choices=["general", "unit"],
+        default="general",
+        help="Document domain type for single-file extraction: 'general' (Informe Gastos Comunes) or 'unit' (Nota de Cobro)",
     )
     parser.add_argument(
         "--sync",
         action="store_true",
-        help="Trigger batch reconciliation of all pending reports via backend service",
+        help="Trigger batch reconciliation of all pending reports and unit bills via backend service",
     )
     parser.add_argument(
         "--status",
@@ -248,12 +291,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--process-input",
         action="store_true",
-        help="Batch process all PDF files currently in data/input/ and move them to processed/ or failed/",
+        help="Batch process all PDF files currently in data/input/general/ and data/input/unit/",
     )
     parser.add_argument(
         "--watch",
         action="store_true",
-        help="Continuously watch data/input/ for new PDF files and process them automatically",
+        help="Continuously watch data/input/general/ and data/input/unit/ for new PDF files",
     )
     parser.add_argument(
         "-o",
@@ -301,18 +344,28 @@ def main(argv: list[str] | None = None) -> None:
         print(f"Error: File not found: {input_pdf}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"📄 Processing: {input_pdf.name}")
+    doc_type = args.type
+    print(f"📄 Processing [{doc_type}]: {input_pdf.name}")
     print(f"⚙️  Primary model: {settings.default_model}")
     print(f"🔄 Fallback models: {', '.join(settings.fallback_models)}")
 
     try:
-        result = run_workflow(
-            pdf_path=input_pdf,
-            output_path=args.output,
-            max_retries=args.retries,
-        )
+        if doc_type == "unit":
+            result = run_unit_workflow(
+                pdf_path=input_pdf,
+                output_path=args.output,
+                max_retries=args.retries,
+            )
+        else:
+            result = run_workflow(
+                pdf_path=input_pdf,
+                output_path=args.output,
+                max_retries=args.retries,
+            )
 
-        dest = result.get("_destination_path") or (args.output or (settings.output_dir / f"{input_pdf.stem}.json"))
+        dest = result.get("_destination_path") or (
+            args.output or (settings.output_dir / doc_type / f"{input_pdf.stem}.json")
+        )
         spool_status = result.get("_spool_status", "unknown")
         meta = result.get("_metadata", {})
 
@@ -342,7 +395,15 @@ def main(argv: list[str] | None = None) -> None:
                 print(f"💾 Saved to: {dest}")
 
         print(f"📅 Issue date: {result.get('issue_date')}")
-        print(f"📊 Sections extracted: {len(result.get('sections', []))}")
+        if doc_type == "unit":
+            print(f"🏢 Unit code: {result.get('unit_code')} (Alícuota: {result.get('alicuota_total')}%)")
+            print(
+                f"📊 Tables extracted: {len(result.get('concepts', []))} concept(s), "
+                f"{len(result.get('consumptions', []))} consumption(s), "
+                f"{len(result.get('unit_charges', []))} unit charge(s)"
+            )
+        else:
+            print(f"📊 Sections extracted: {len(result.get('sections', []))}")
 
         if meta:
             model_used = meta.get("model_used")
@@ -368,3 +429,4 @@ def main(argv: list[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
+

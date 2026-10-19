@@ -307,3 +307,65 @@ def test_process_input_batch_moves_pdfs_to_processed_and_failed(tmp_path: Path, 
     assert (settings.input_processed_dir / "2026-9.pdf").exists()
     assert (settings.input_failed_dir / "bad.pdf").exists()
 
+
+def test_unit_workflow_spool_routing_and_batch_folder_isolation(tmp_path: Path, monkeypatch):
+    """Verify unit bills spool to data/output/unit/ and --process-input routes general/ and unit/ independently."""
+    from data_extractor.cli import handle_process_input_command
+
+    settings = get_settings()
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    monkeypatch.setattr(settings, "input_dir", input_dir)
+    monkeypatch.setattr(settings, "output_dir", output_dir)
+    settings.ensure_directories()
+
+    # 1. Test load_and_spool_report for doc_type="unit"
+    unit_payload = {
+        "issue_date": "01/08/2026",
+        "unit_code": "B-504",
+        "alicuota_total": 0.16736,
+        "concepts": [{"concept": "Gasto Común", "detail": "0,16736 %", "amount": 93236}],
+        "consumptions": [],
+        "unit_charges": [],
+    }
+    mock_resp = MagicMock()
+    mock_resp.status_code = 201
+    mock_resp.json.return_value = {"id": "unit-123", "overwritten": False}
+
+    with patch("requests.post", return_value=mock_resp) as mock_post:
+        dest, status = load_and_spool_report(
+            output_data=copy.deepcopy(unit_payload),
+            stem="504b-2026-08",
+            is_valid=True,
+            doc_type="unit",
+        )
+        assert status == "synced"
+        assert dest == settings.unit_synced_dir / "504b-2026-08.json"
+        assert dest.exists()
+        assert mock_post.call_args[0][0] == settings.backend_unit_bills_url
+
+    # 2. Test --process-input across data/input/general/ and data/input/unit/
+    gen_pdf = settings.general_input_dir / "2026-08.pdf"
+    unit_pdf = settings.unit_input_dir / "504b-2026-08.pdf"
+    gen_pdf.write_bytes(b"%PDF-1.4 general")
+    unit_pdf.write_bytes(b"%PDF-1.4 unit")
+
+    with (
+        patch(
+            "data_extractor.cli.run_workflow",
+            return_value={"issue_date": "01/08/2026", "sections": [], "_spool_status": "synced"},
+        ) as mock_gen,
+        patch(
+            "data_extractor.cli.run_unit_workflow",
+            return_value={"issue_date": "01/08/2026", "unit_code": "B-504", "_spool_status": "synced"},
+        ) as mock_unit,
+    ):
+        exit_code = handle_process_input_command()
+
+    assert exit_code == 0
+    mock_gen.assert_called_once()
+    mock_unit.assert_called_once()
+    assert (settings.input_processed_dir / "2026-08.pdf").exists()
+    assert (settings.unit_input_processed_dir / "504b-2026-08.pdf").exists()
+
+
