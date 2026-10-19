@@ -3,6 +3,7 @@
   "sections": [
     {
       "general_topic": "Remuneraciones",
+      "expense_type": "operational",
       "sub_topics": [
         {
           "name": "Sueldos",
@@ -24,6 +25,7 @@
     },
     {
       "general_topic": "Consumos",
+      "expense_type": "operational",
       "sub_topics": [
         {
           "name": "Agua Potable",
@@ -53,6 +55,7 @@
     },
     {
       "general_topic": "Mantenciones y Servicios",
+      "expense_type": "operational",
       "sub_topics": [
         {
           "name": "Mantención Ascensores",
@@ -90,6 +93,7 @@
     },
     {
       "general_topic": "Reparaciones y Repuestos",
+      "expense_type": "operational",
       "sub_topics": [
         {
           "name": "Reposición Plantas y Jardines",
@@ -107,6 +111,7 @@
     },
     {
       "general_topic": "Seguros",
+      "expense_type": "operational",
       "sub_topics": [
         {
           "name": "Incendio y Misceláneos",
@@ -116,6 +121,7 @@
     },
     {
       "general_topic": "Asesorías y Honorarios Profesionales",
+      "expense_type": "operational",
       "sub_topics": [
         {
           "name": "Asesorías Contables",
@@ -125,6 +131,7 @@
     },
     {
       "general_topic": "Insumos",
+      "expense_type": "operational",
       "sub_topics": [
         {
           "name": "Vestuario Personal Comunidad",
@@ -142,6 +149,7 @@
     },
     {
       "general_topic": "Otros Gastos",
+      "expense_type": "operational",
       "sub_topics": [
         {
           "name": "Correspondencia",
@@ -154,6 +162,20 @@
         {
           "name": "Arriendo maquina transbank",
           "value": 23855
+        }
+      ]
+    },
+    {
+      "general_topic": "Fondos",
+      "expense_type": "fondos",
+      "sub_topics": [
+        {
+          "name": "Fondo de Reserva 5%",
+          "value": 2822715
+        },
+        {
+          "name": "Fondo Impermeabilizacion",
+          "value": 6500000
         }
       ]
     }

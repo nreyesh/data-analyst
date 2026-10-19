@@ -135,3 +135,40 @@ def test_ingest_report_with_negative_items(client: TestClient):
     assert detail["sections"][0]["calculated_subtotal"] == 17981197
     finiquitos = next(it for it in detail["sections"][0]["items"] if it["name"] == "Finiquitos")
     assert finiquitos["amount"] == -250690
+
+
+def test_ingest_report_persists_operational_and_fondos_totals(client: TestClient):
+    """Verify operational_total, fondos_total, calculated_grand_total, and section expense_type persistence."""
+    payload = {
+        "issue_date": "01/05/2026",
+        "sections": [
+            {
+                "general_topic": "Remuneraciones",
+                "sub_topics": [{"name": "Sueldos", "value": 49387905}],
+            },
+            {
+                "general_topic": "Fondos",
+                "sub_topics": [
+                    {"name": "Fondo de Reserva 5%", "value": 2469395},
+                    {"name": "Fondo Impermeabilizacion", "value": 11500000},
+                ],
+            },
+        ],
+    }
+    response = client.post("/api/v1/reports", json=payload)
+    assert response.status_code == 201
+    data = response.json()
+    assert data["operational_total"] == 49387905
+    assert data["fondos_total"] == 13969395
+    assert data["calculated_grand_total"] == 63357300
+
+    detail = client.get(f"/api/v1/reports/{data['id']}").json()
+    assert detail["operational_total"] == 49387905
+    assert detail["fondos_total"] == 13969395
+    assert detail["calculated_grand_total"] == 63357300
+
+    sec_by_cat = {s["category_name"]: s for s in detail["sections"]}
+    assert sec_by_cat["remuneraciones"]["expense_type"] == "operational"
+    assert sec_by_cat["fondos"]["expense_type"] == "fondos"
+    assert sec_by_cat["fondos"]["calculated_subtotal"] == 13969395
+

@@ -84,6 +84,16 @@ class Settings(BaseSettings):
     )
 
     @property
+    def input_processed_dir(self) -> Path:
+        """Directory archiving raw PDFs that passed extraction and validation."""
+        return self.input_dir / "processed"
+
+    @property
+    def input_failed_dir(self) -> Path:
+        """Quarantine directory for raw PDFs that failed extraction or validation."""
+        return self.input_dir / "failed"
+
+    @property
     def pending_dir(self) -> Path:
         """Directory staging validated reports awaiting database sync."""
         return self.output_dir / "pending"
@@ -114,9 +124,11 @@ class Settings(BaseSettings):
         return f"{self.backend_base_url.rstrip('/')}/api/v1/sync/status"
 
     def ensure_directories(self) -> None:
-        """Create standard data, storage, and spool directories if they do not exist."""
+        """Create standard data, storage, input lifecycle, and output spool directories if they do not exist."""
         for path in (
             self.input_dir,
+            self.input_processed_dir,
+            self.input_failed_dir,
             self.output_dir,
             self.storage_dir,
             self.prompts_dir,

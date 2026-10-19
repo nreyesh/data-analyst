@@ -23,8 +23,14 @@ class ExpenseReportModel(Base):
     )
     period_year: Mapped[int] = mapped_column(Integer, nullable=False)
     period_month: Mapped[int] = mapped_column(Integer, nullable=False)
+    operational_total: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False, comment="Operational total (TOTAL GASTOS COMUNES) in CLP"
+    )
+    fondos_total: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False, comment="Reserve funds and surcharges total in CLP"
+    )
     calculated_grand_total: Mapped[int] = mapped_column(
-        Integer, nullable=False, comment="Total in Chilean Pesos (CLP)"
+        Integer, nullable=False, comment="Final billed total (operational + fondos) in Chilean Pesos (CLP)"
     )
     telemetry_metadata: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="JSON string of extraction telemetry"
@@ -68,6 +74,9 @@ class ExpenseSectionModel(Base):
         index=True,
     )
     category_name: Mapped[str] = mapped_column(String, nullable=False)
+    expense_type: Mapped[str] = mapped_column(
+        String(32), default="operational", nullable=False, comment="'operational' or 'fondos'"
+    )
     calculated_subtotal: Mapped[int] = mapped_column(
         Integer, nullable=False, comment="Subtotal in Chilean Pesos (CLP)"
     )

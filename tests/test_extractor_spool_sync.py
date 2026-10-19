@@ -240,3 +240,70 @@ def test_validation_logging_does_not_leak_amounts(caplog):
         assert "87654321" not in record.message
         assert "99999999" not in record.message
         assert "Juan Perez" not in record.message
+
+
+def test_stale_spool_cleanup_on_re_ingestion(
+    tmp_path: Path, monkeypatch, mock_output_data: dict
+):
+    """Verify that when a previously failed report succeeds on re-ingestion, the stale failed JSON is unlinked."""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "output_dir", tmp_path)
+    settings.ensure_directories()
+
+    # Create a stale failed file first
+    stale_failed = settings.failed_dir / "2026-9.json"
+    stale_failed.write_text('{"_status": "FAILED_VALIDATION"}', encoding="utf-8")
+    assert stale_failed.exists()
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"id": "019273c5-reingest", "overwritten": True}
+
+    with patch("requests.post", return_value=mock_resp):
+        dest, spool_status = load_and_spool_report(
+            output_data=copy.deepcopy(mock_output_data),
+            stem="2026-9",
+            is_valid=True,
+        )
+
+    assert spool_status == "synced"
+    assert dest == settings.synced_dir / "2026-9.json"
+    assert dest.exists()
+    assert not stale_failed.exists()
+
+
+def test_process_input_batch_moves_pdfs_to_processed_and_failed(tmp_path: Path, monkeypatch):
+    """Verify --process-input moves valid PDFs to input/processed/ and failing PDFs to input/failed/."""
+    from data_extractor.cli import handle_process_input_command
+
+    settings = get_settings()
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    monkeypatch.setattr(settings, "input_dir", input_dir)
+    monkeypatch.setattr(settings, "output_dir", output_dir)
+    settings.ensure_directories()
+
+    good_pdf = input_dir / "2026-9.pdf"
+    bad_pdf = input_dir / "bad.pdf"
+    good_pdf.write_bytes(b"%PDF-1.4 dummy valid")
+    bad_pdf.write_bytes(b"%PDF-1.4 dummy invalid")
+
+    def _mock_run_workflow(pdf_path: Path, max_retries=None, output_path=None):
+        if Path(pdf_path).name == "2026-9.pdf":
+            return {"issue_date": "01/09/2026", "sections": [], "_spool_status": "synced"}
+        return {
+            "issue_date": "",
+            "sections": [],
+            "_status": "FAILED_VALIDATION",
+            "_spool_status": "failed",
+        }
+
+    with patch("data_extractor.cli.run_workflow", side_effect=_mock_run_workflow):
+        exit_code = handle_process_input_command()
+
+    assert exit_code == 1  # 1 succeeded, 1 failed
+    assert not good_pdf.exists()
+    assert not bad_pdf.exists()
+    assert (settings.input_processed_dir / "2026-9.pdf").exists()
+    assert (settings.input_failed_dir / "bad.pdf").exists()
+

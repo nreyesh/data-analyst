@@ -1,4 +1,4 @@
-"""Deterministic extraction of declared subtotals and grand totals from PDF text."""
+"""Deterministic extraction of declared subtotals, Fondos, and grand totals from PDF text."""
 
 from __future__ import annotations
 
@@ -42,21 +42,40 @@ class GroundTruthData:
     """Declared totals and period date extracted directly from document text."""
 
     period_date: str | None = None
+    operational_total: int | None = None
+    fondos_total: int | None = None
     grand_total: int | None = None
     section_totals: dict[str, int] = field(default_factory=dict)
     raw_section_totals: dict[str, int] = field(default_factory=dict)
+    fondos_items: list[tuple[str, int]] = field(default_factory=list)
+
+
+def _format_fondo_item_name(raw_label: str) -> str:
+    """Format an uppercase PDF fund line label into clean title case."""
+    words = raw_label.strip().split()
+    formatted: list[str] = []
+    lowercase_connectors = {"de", "del", "al", "y", "e", "en", "por", "para"}
+    for idx, word in enumerate(words):
+        lower_w = word.lower()
+        if idx > 0 and lower_w in lowercase_connectors:
+            formatted.append(lower_w)
+        elif word.endswith("%"):
+            formatted.append(word)
+        else:
+            formatted.append(word.capitalize())
+    return " ".join(formatted)
 
 
 def extract_ground_truth(
     pdf_source: str | Path | bytes,
 ) -> GroundTruthData:
-    """Extract declared section subtotals and grand total from a digital PDF.
+    """Extract declared operational section subtotals, Fondos, and final grand total from a digital PDF.
 
     Args:
         pdf_source: Path to the PDF file or raw PDF bytes.
 
     Returns:
-        GroundTruthData with grand_total and normalized section_totals.
+        GroundTruthData with operational_total, fondos_total, grand_total, and normalized section_totals.
     """
     if isinstance(pdf_source, (str, Path)):
         doc = fitz.open(str(pdf_source))
@@ -85,13 +104,15 @@ def extract_ground_truth(
         if month_num is not None:
             result.period_date = f"01/{month_num:02d}/{year:04d}"
 
-    # 1. Extract Grand Total (TOTAL GASTOS COMUNES)
-    m_grand = re.search(r"TOTAL GASTOS COMUNES\s*[\r\n]+\s*(-?)\$(-?)([\d\.]+)", full_text)
-    if m_grand:
-        sign = -1 if (m_grand.group(1) == "-" or m_grand.group(2) == "-") else 1
-        result.grand_total = sign * int(m_grand.group(3).replace(".", ""))
+    # 1. Extract Operational Total (TOTAL GASTOS COMUNES)
+    m_op_total = re.search(
+        r"TOTAL GASTOS COMUNES\s*[\r\n]+\s*(-?)\$(-?)([\d\.]+)", full_text
+    )
+    if m_op_total:
+        sign = -1 if (m_op_total.group(1) == "-" or m_op_total.group(2) == "-") else 1
+        result.operational_total = sign * int(m_op_total.group(3).replace(".", ""))
 
-    # 2. Extract Section Subtotals by text block ordering
+    # 2. Extract Operational Section Subtotals by text block ordering (before TOTAL GASTOS COMUNES)
     cat_patterns = [
         re.escape(c) + r"\s*$" for c in KNOWN_CATEGORIES if c != "Gas Cargo Comun al 30%"
     ]
@@ -146,6 +167,48 @@ def extract_ground_truth(
             normalized_totals["Consumos"] += gas_amount
         else:
             normalized_totals["Consumos"] = gas_amount
+
+    # 4. Extract "Fondos" items (between TOTAL GASTOS COMUNES and standalone TOTAL) and final TOTAL
+    if m_op_total:
+        tail_text = full_text[m_op_total.end() :]
+        m_final_total = re.search(
+            r"^\s*TOTAL\s*[\r\n]+\s*(-?)\$(-?)([\d\.]+)",
+            tail_text,
+            re.MULTILINE,
+        )
+        if m_final_total:
+            sign = (
+                -1
+                if (m_final_total.group(1) == "-" or m_final_total.group(2) == "-")
+                else 1
+            )
+            result.grand_total = sign * int(m_final_total.group(3).replace(".", ""))
+
+            fondos_block = tail_text[: m_final_total.start()]
+            fondos_items: list[tuple[str, int]] = []
+            for m_item in re.finditer(
+                r"^\s*([^\r\n\$]+?)\s*[\r\n]+\s*(-?)\$(-?)([\d\.]+)",
+                fondos_block,
+                re.MULTILINE,
+            ):
+                raw_label = m_item.group(1).strip()
+                item_sign = (
+                    -1 if (m_item.group(2) == "-" or m_item.group(3) == "-") else 1
+                )
+                item_val = item_sign * int(m_item.group(4).replace(".", ""))
+                fondos_items.append((_format_fondo_item_name(raw_label), item_val))
+
+            result.fondos_items = fondos_items
+            if fondos_items:
+                fondos_sum = sum(val for _, val in fondos_items)
+                result.fondos_total = fondos_sum
+                normalized_totals["Fondos"] = fondos_sum
+            else:
+                result.fondos_total = 0
+        else:
+            # Fallback if document has no separate final TOTAL line
+            result.grand_total = result.operational_total
+            result.fondos_total = 0
 
     result.section_totals = normalized_totals
 

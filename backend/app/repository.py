@@ -76,16 +76,24 @@ def save_report(
         db.delete(existing_report)
         db.flush()
 
-    # Calculate deterministic subtotals and grand total in integer CLP
-    grand_total = 0
+    # Calculate deterministic subtotals, operational_total, fondos_total, and grand total in integer CLP
+    operational_total = 0
+    fondos_total = 0
     section_models: list[ExpenseSectionModel] = []
 
     for s_idx, sec_req in enumerate(request.sections):
         subtotal = sum(item.value for item in sec_req.sub_topics)
-        grand_total += subtotal
+        norm_cat = normalize_text(sec_req.general_topic)
+        sec_type = "fondos" if norm_cat == "fondos" or sec_req.expense_type == "fondos" else "operational"
+
+        if sec_type == "fondos":
+            fondos_total += subtotal
+        else:
+            operational_total += subtotal
 
         sec_model = ExpenseSectionModel(
-            category_name=normalize_text(sec_req.general_topic),
+            category_name=norm_cat,
+            expense_type=sec_type,
             calculated_subtotal=subtotal,
             display_order=s_idx,
         )
@@ -101,6 +109,8 @@ def save_report(
 
         section_models.append(sec_model)
 
+    grand_total = operational_total + fondos_total
+
     # Prepare telemetry metadata JSON
     metadata_json = json.dumps(request.metadata) if request.metadata else None
 
@@ -109,6 +119,8 @@ def save_report(
         period_date=period_date,
         period_year=year,
         period_month=month,
+        operational_total=operational_total,
+        fondos_total=fondos_total,
         calculated_grand_total=grand_total,
         telemetry_metadata=metadata_json,
         sections=section_models,

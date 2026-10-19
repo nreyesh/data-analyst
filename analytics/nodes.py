@@ -159,9 +159,10 @@ def planner_node(state: DataAnalystState, client: genai.Client | None = None) ->
 
 
 def trajectory_inspector_node(state: DataAnalystState) -> dict[str, Any]:
-    """Execute Hop 1 macro query on expense_reports to verify monthly grand totals across all years."""
+    """Execute Hop 1 macro query on expense_reports to verify monthly operational, fondos, and grand totals across all years."""
     sql = (
-        "SELECT period_date, period_year, period_month, calculated_grand_total "
+        "SELECT period_date, period_year, period_month, "
+        "operational_total, fondos_total, calculated_grand_total "
         "FROM expense_reports ORDER BY period_date ASC"
     )
 

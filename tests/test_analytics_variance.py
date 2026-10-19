@@ -136,11 +136,19 @@ def test_trajectory_inspector_fetches_2026_chronological_totals(gateway_bridge):
     assert "2026-05-01" in dates
     assert "2026-07-01" in dates
 
-    # Verify May 2026 is the annual trough ($49,387,905) and July 2026 is the winter peak ($56,907,702)
-    by_date = {row["period_date"]: row["calculated_grand_total"] for row in trajectory}
-    assert by_date["2026-05-01"] == 49387905
-    assert by_date["2026-07-01"] == 56907702
-    assert by_date["2026-01-01"] == 57063002
+    # Verify May 2026 operational trough ($49,387,905), Fondos ($13,969,395), and grand total ($63,357,300)
+    by_date = {row["period_date"]: row for row in trajectory}
+    assert by_date["2026-05-01"]["operational_total"] == 49387905
+    assert by_date["2026-05-01"]["fondos_total"] == 13969395
+    assert by_date["2026-05-01"]["calculated_grand_total"] == 63357300
+
+    assert by_date["2026-07-01"]["operational_total"] == 56907702
+    assert by_date["2026-07-01"]["fondos_total"] == 8345385
+    assert by_date["2026-07-01"]["calculated_grand_total"] == 65253087
+
+    assert by_date["2026-01-01"]["operational_total"] == 57063002
+    assert by_date["2026-01-01"]["fondos_total"] == 2853150
+    assert by_date["2026-01-01"]["calculated_grand_total"] == 59916152
 
 
 def test_trajectory_evaluator_detects_paradox_and_isolates_inflection_points():

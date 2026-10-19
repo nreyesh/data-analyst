@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import re
-from typing import TypedDict
+from typing import Literal, TypedDict
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+ExpenseType = Literal["operational", "fondos"]
 
 
 class SubTopic(BaseModel):
@@ -22,12 +25,25 @@ class Section(BaseModel):
     """Categorical section containing individual sub-topic line items."""
 
     general_topic: str = Field(
-        description="Category name (e.g. Consumos, Remuneraciones, Mantenciones y Servicios)."
+        description="Category name (e.g. Consumos, Remuneraciones, Mantenciones y Servicios, Fondos)."
+    )
+    expense_type: ExpenseType = Field(
+        default="operational",
+        description="Expense classification: 'fondos' when general_topic is 'Fondos', otherwise 'operational'.",
     )
     sub_topics: list[SubTopic] = Field(
         default_factory=list,
         description="Individual items and their values belonging to this category.",
     )
+
+    @model_validator(mode="after")
+    def enforce_expense_type(self) -> Section:
+        """Deterministically set expense_type='fondos' when general_topic is 'Fondos', otherwise 'operational'."""
+        if self.general_topic.strip().lower() == "fondos":
+            self.expense_type = "fondos"
+        else:
+            self.expense_type = "operational"
+        return self
 
 
 class ExpenseReport(BaseModel):
@@ -61,6 +77,7 @@ class ExpenseReport(BaseModel):
             else:
                 consolidated[topic] = Section(
                     general_topic=topic,
+                    expense_type=sec.expense_type,
                     sub_topics=list(sec.sub_topics),
                 )
         self.sections = list(consolidated.values())
@@ -81,6 +98,12 @@ class ValidationResult(BaseModel):
     """Overall cross-validation outcome for an expense report."""
 
     is_valid: bool
+    calculated_operational_total: int = 0
+    declared_operational_total: int | None = None
+    operational_total_difference: int = 0
+    calculated_fondos_total: int = 0
+    declared_fondos_total: int | None = None
+    fondos_total_difference: int = 0
     calculated_grand_total: int
     declared_grand_total: int | None
     grand_total_difference: int
@@ -123,6 +146,8 @@ class ExtractionState(TypedDict):
     pdf_path: str
     pdf_bytes: bytes
     ground_truth_totals: dict[str, int]
+    expected_operational_total: int | None
+    expected_fondos_total: int | None
     expected_grand_total: int | None
     expected_period_date: str | None
     report: ExpenseReport | None

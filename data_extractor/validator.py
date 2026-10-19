@@ -16,9 +16,10 @@ def validate_expense_report(
 ) -> ValidationResult:
     """Validate an extracted ExpenseReport against ground-truth totals.
 
-    Performs two-tier validation:
-    1. Granular check: sum of items in each section == declared section subtotal.
-    2. Holistic check: sum across all sections == declared TOTAL GASTOS COMUNES.
+    Performs three-tier validation:
+    1. Granular check: sum of items in each section (including 'Fondos') == declared section subtotal.
+    2. Operational check: sum across 'operational' sections == declared TOTAL GASTOS COMUNES.
+    3. Holistic check: sum across all sections ('operational' + 'fondos') == declared final TOTAL.
 
     Args:
         report: The extracted ExpenseReport model.
@@ -43,7 +44,7 @@ def validate_expense_report(
         sec.general_topic.strip(): sec for sec in report.sections
     }
 
-    # 1. Validate each extracted section
+    # 1. Validate each extracted section (operational and Fondos)
     for section in report.sections:
         topic_name = section.general_topic.strip()
         calc_sum = sum(item.value for item in section.sub_topics)
@@ -72,7 +73,7 @@ def validate_expense_report(
             )
         )
 
-    # 2. Check if any declared section was completely omitted
+    # 2. Check if any declared section (including 'Fondos') was completely omitted
     for declared_topic, expected_amt in ground_truth.section_totals.items():
         if declared_topic not in extracted_sections_map:
             errors.append(
@@ -89,10 +90,40 @@ def validate_expense_report(
                 )
             )
 
-    # 3. Holistic Grand Total validation
-    calc_grand_total = sum(
-        item.value for sec in report.sections for item in sec.sub_topics
+    # 3. Operational & Fondos Subtotal Calculations
+    calc_operational_total = sum(
+        item.value
+        for sec in report.sections
+        if sec.expense_type == "operational"
+        for item in sec.sub_topics
     )
+    calc_fondos_total = sum(
+        item.value
+        for sec in report.sections
+        if sec.expense_type == "fondos"
+        for item in sec.sub_topics
+    )
+
+    op_diff = (
+        calc_operational_total - ground_truth.operational_total
+        if ground_truth.operational_total is not None
+        else 0
+    )
+    if ground_truth.operational_total is not None and op_diff != 0:
+        errors.append(
+            f"Operational total mismatch: sum of operational sections is ${calc_operational_total:,} CLP, "
+            f"but document TOTAL GASTOS COMUNES is ${ground_truth.operational_total:,} CLP "
+            f"(difference: {op_diff:+,} CLP)."
+        )
+
+    fondos_diff = (
+        calc_fondos_total - ground_truth.fondos_total
+        if ground_truth.fondos_total is not None
+        else 0
+    )
+
+    # 4. Holistic Final Grand Total validation
+    calc_grand_total = calc_operational_total + calc_fondos_total
     grand_diff = (
         calc_grand_total - ground_truth.grand_total
         if ground_truth.grand_total is not None
@@ -101,8 +132,8 @@ def validate_expense_report(
 
     if ground_truth.grand_total is not None and grand_diff != 0:
         errors.append(
-            f"Grand total mismatch: sum of all extracted items is ${calc_grand_total:,} CLP, "
-            f"but document TOTAL GASTOS COMUNES is ${ground_truth.grand_total:,} CLP "
+            f"Grand total mismatch: sum of all extracted items (operational + Fondos) is ${calc_grand_total:,} CLP, "
+            f"but document final TOTAL is ${ground_truth.grand_total:,} CLP "
             f"(difference: {grand_diff:+,} CLP)."
         )
 
@@ -124,6 +155,12 @@ def validate_expense_report(
 
     return ValidationResult(
         is_valid=is_overall_valid,
+        calculated_operational_total=calc_operational_total,
+        declared_operational_total=ground_truth.operational_total,
+        operational_total_difference=op_diff,
+        calculated_fondos_total=calc_fondos_total,
+        declared_fondos_total=ground_truth.fondos_total,
+        fondos_total_difference=fondos_diff,
         calculated_grand_total=calc_grand_total,
         declared_grand_total=ground_truth.grand_total,
         grand_total_difference=grand_diff,

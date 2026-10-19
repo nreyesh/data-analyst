@@ -17,12 +17,14 @@ PDF_PATH = Path(__file__).parent.parent / "examples" / "2026-9.pdf"
 
 
 def test_ground_truth_extraction():
-    """Verify that PyMuPDF deterministic ground truth parser extracts correct totals."""
+    """Verify that PyMuPDF deterministic ground truth parser extracts operational_total, Fondos, and final grand_total."""
     assert PDF_PATH.exists(), f"Sample PDF not found at {PDF_PATH}"
     gt = extract_ground_truth(PDF_PATH)
 
     assert gt.period_date == "01/09/2026"
-    assert gt.grand_total == 56454297
+    assert gt.operational_total == 56454297
+    assert gt.fondos_total == 9322715
+    assert gt.grand_total == 65777012
     assert gt.section_totals["Remuneraciones"] == 19632258
     assert gt.section_totals["Consumos"] == 13669643  # includes Gas Cargo Comun
     assert gt.section_totals["Mantenciones y Servicios"] == 17071495
@@ -31,13 +33,19 @@ def test_ground_truth_extraction():
     assert gt.section_totals["Asesorías y Honorarios Profesionales"] == 24324
     assert gt.section_totals["Insumos"] == 1713550
     assert gt.section_totals["Otros Gastos"] == 133855
+    assert gt.section_totals["Fondos"] == 9322715
+    assert gt.fondos_items == [
+        ("Fondo de Reserva 5%", 2822715),
+        ("Fondo Impermeabilizacion", 6500000),
+    ]
 
-    # Sum of normalized categories must exactly equal grand total
+    # Sum of normalized categories (including Fondos) must exactly equal grand total
     assert sum(gt.section_totals.values()) == gt.grand_total
+    assert gt.operational_total + gt.fondos_total == gt.grand_total
 
 
 def test_validator_with_perfect_fixture():
-    """Verify that the perfect expected fixture passes full validation with zero errors."""
+    """Verify that the perfect expected fixture passes full 3-tier validation with zero errors."""
     with open(FIXTURE_PATH, "r", encoding="utf-8") as f:
         data = json.load(f)
 
@@ -48,8 +56,12 @@ def test_validator_with_perfect_fixture():
 
     assert result.is_valid is True
     assert len(result.errors) == 0
+    assert result.operational_total_difference == 0
+    assert result.fondos_total_difference == 0
     assert result.grand_total_difference == 0
-    assert result.calculated_grand_total == 56454297
+    assert result.calculated_operational_total == 56454297
+    assert result.calculated_fondos_total == 9322715
+    assert result.calculated_grand_total == 65777012
 
 
 def test_validator_detects_section_discrepancy():
@@ -74,12 +86,12 @@ def test_validator_detects_section_discrepancy():
 
 
 def test_validator_detects_missing_section():
-    """Verify that omission of an entire section is detected and reported."""
+    """Verify that omission of an entire section (including Fondos) is detected and reported."""
     with open(FIXTURE_PATH, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    # Remove 'Otros Gastos'
-    data["sections"] = [s for s in data["sections"] if s["general_topic"] != "Otros Gastos"]
+    # Remove 'Fondos'
+    data["sections"] = [s for s in data["sections"] if s["general_topic"] != "Fondos"]
 
     report = ExpenseReport.model_validate(data)
     gt = extract_ground_truth(PDF_PATH)
@@ -87,18 +99,23 @@ def test_validator_detects_missing_section():
     result = validate_expense_report(report, gt)
 
     assert result.is_valid is False
-    missing_errors = [e for e in result.errors if "Missing section 'Otros Gastos'" in e]
+    missing_errors = [e for e in result.errors if "Missing section 'Fondos'" in e]
     assert len(missing_errors) == 1
 
 
 def test_pydantic_model_invariants():
-    """Verify date formatting and negative value invariants."""
-    # Valid date
+    """Verify date formatting, expense_type deterministic assignment, and negative value invariants."""
+    # Valid date and expense_type assignment
     valid_report = ExpenseReport(
         issue_date="01/10/2026",
-        sections=[Section(general_topic="Consumos", sub_topics=[SubTopic(name="Agua", value=100)])],
+        sections=[
+            Section(general_topic="Consumos", sub_topics=[SubTopic(name="Agua", value=100)]),
+            Section(general_topic="Fondos", sub_topics=[SubTopic(name="Fondo de Reserva 5%", value=5)]),
+        ],
     )
     assert valid_report.issue_date == "01/10/2026"
+    assert valid_report.sections[0].expense_type == "operational"
+    assert valid_report.sections[1].expense_type == "fondos"
 
     # Invalid date pattern
     with pytest.raises(ValidationError):
@@ -177,8 +194,11 @@ def test_ground_truth_multi_block_repeated_category():
     assert pdf_11.exists(), f"Sample PDF not found: {pdf_11}"
     gt_11 = extract_ground_truth(pdf_11)
     assert gt_11.period_date == "01/11/2025"
-    assert gt_11.grand_total == 57032259
+    assert gt_11.operational_total == 57032259
+    assert gt_11.fondos_total == 2851613
+    assert gt_11.grand_total == 59883872
     assert gt_11.section_totals["Remuneraciones"] == 17881388
+    assert gt_11.section_totals["Fondos"] == 2851613
     assert sum(gt_11.section_totals.values()) == gt_11.grand_total
 
     # 2025-01.pdf has payroll ($14,336,664) and staff loan ($120,000)
@@ -186,8 +206,11 @@ def test_ground_truth_multi_block_repeated_category():
     assert pdf_01.exists(), f"Sample PDF not found: {pdf_01}"
     gt_01 = extract_ground_truth(pdf_01)
     assert gt_01.period_date == "01/01/2025"
-    assert gt_01.grand_total == 48439988
+    assert gt_01.operational_total == 48439988
+    assert gt_01.fondos_total == 2421999
+    assert gt_01.grand_total == 50861987
     assert gt_01.section_totals["Remuneraciones"] == 14456664
+    assert gt_01.section_totals["Fondos"] == 2421999
     assert sum(gt_01.section_totals.values()) == gt_01.grand_total
 
 
@@ -220,5 +243,3 @@ def test_expense_report_consolidates_duplicate_sections():
     assert len(remun_sec.sub_topics) == 3
     assert [it.name for it in remun_sec.sub_topics] == ["Sueldos", "Aguinaldo", "Préstamos"]
     assert sum(it.value for it in remun_sec.sub_topics) == 11886123 + 520240 + 120000
-
-

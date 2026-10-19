@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import re
-from typing import Any
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from typing import Any, Literal
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+ExpenseType = Literal["operational", "fondos"]
 
 
 # ============================================================================
@@ -28,9 +31,22 @@ class SectionRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     general_topic: str = Field(..., min_length=1, description="Category name")
+    expense_type: ExpenseType = Field(
+        default="operational",
+        description="Expense classification: 'operational' or 'fondos'",
+    )
     sub_topics: list[SubTopicRequest] = Field(
         default_factory=list, description="List of items in this category"
     )
+
+    @model_validator(mode="after")
+    def enforce_expense_type(self) -> SectionRequest:
+        """Deterministically set expense_type='fondos' when general_topic is 'Fondos'."""
+        if self.general_topic.strip().lower() == "fondos":
+            self.expense_type = "fondos"
+        else:
+            self.expense_type = "operational"
+        return self
 
 
 class ReportIngestRequest(BaseModel):
@@ -72,6 +88,8 @@ class ReportIngestResponse(BaseModel):
     period_date: str = Field(description="Normalized ISO date 'YYYY-MM-01'")
     status: str = Field(description="'created' or 'overwritten'")
     overwritten: bool = Field(description="True if an existing record was overwritten")
+    operational_total: int = Field(default=0, description="Operational total in CLP")
+    fondos_total: int = Field(default=0, description="Fondos total in CLP")
     calculated_grand_total: int = Field(description="Grand total in CLP")
     sections_count: int = Field(description="Number of sections stored")
     items_count: int = Field(description="Total line items stored across sections")
@@ -101,6 +119,7 @@ class ExpenseSectionResponse(BaseModel):
 
     id: str
     category_name: str
+    expense_type: str = "operational"
     calculated_subtotal: int
     display_order: int
     items: list[ExpenseItemResponse] = Field(default_factory=list)
@@ -115,6 +134,8 @@ class ExpenseReportSummaryResponse(BaseModel):
     period_date: str
     period_year: int
     period_month: int
+    operational_total: int = 0
+    fondos_total: int = 0
     calculated_grand_total: int
     created_at: str
     updated_at: str

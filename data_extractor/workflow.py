@@ -31,6 +31,8 @@ def prepare_document_node(state: ExtractionState) -> dict:
     return {
         "pdf_bytes": pdf_bytes,
         "ground_truth_totals": gt.section_totals,
+        "expected_operational_total": gt.operational_total,
+        "expected_fondos_total": gt.fondos_total,
         "expected_grand_total": gt.grand_total,
         "expected_period_date": gt.period_date,
         "retry_count": 0,
@@ -64,6 +66,8 @@ def validate_extraction_node(state: ExtractionState) -> dict:
 
     gt_data = GroundTruthData(
         period_date=state.get("expected_period_date"),
+        operational_total=state.get("expected_operational_total"),
+        fondos_total=state.get("expected_fondos_total"),
         grand_total=state.get("expected_grand_total"),
         section_totals=state.get("ground_truth_totals", {}),
     )
@@ -147,6 +151,7 @@ def format_output_node(state: ExtractionState) -> dict:
             "sections": [
                 {
                     "general_topic": sec.general_topic,
+                    "expense_type": sec.expense_type,
                     "sub_topics": [
                         {"name": it.name, "value": it.value}
                         for it in sec.sub_topics
@@ -245,6 +250,8 @@ def run_workflow(
         "pdf_path": str(resolved_pdf),
         "pdf_bytes": resolved_pdf.read_bytes(),
         "ground_truth_totals": {},
+        "expected_operational_total": None,
+        "expected_fondos_total": None,
         "expected_grand_total": None,
         "expected_period_date": None,
         "report": None,
@@ -287,6 +294,18 @@ def run_workflow(
     return output_data
 
 
+def _cleanup_stale_spool_files(stem: str, active_dest: Path) -> None:
+    """Remove any stale <stem>.json files from other output spool directories."""
+    settings = get_settings()
+    for spool_dir in (settings.pending_dir, settings.synced_dir, settings.failed_dir):
+        candidate = spool_dir / f"{stem}.json"
+        if candidate.resolve() != active_dest.resolve() and candidate.exists():
+            try:
+                candidate.unlink()
+            except Exception as exc:
+                logger.warning("Could not remove stale spool file %s: %s", candidate, exc)
+
+
 def load_and_spool_report(
     output_data: dict,
     stem: str,
@@ -319,6 +338,7 @@ def load_and_spool_report(
         dest.parent.mkdir(parents=True, exist_ok=True)
         with open(dest, "w", encoding="utf-8") as f:
             json.dump(output_data, f, indent=2, ensure_ascii=False)
+        _cleanup_stale_spool_files(stem, dest)
         return dest, "failed"
 
     # Attempt immediate backend ingestion via HTTP POST
@@ -356,5 +376,6 @@ def load_and_spool_report(
     dest.parent.mkdir(parents=True, exist_ok=True)
     with open(dest, "w", encoding="utf-8") as f:
         json.dump(output_data, f, indent=2, ensure_ascii=False)
+    _cleanup_stale_spool_files(stem, dest)
 
     return dest, spool_status
