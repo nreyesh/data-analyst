@@ -31,13 +31,56 @@ Refer strictly to the provided YAML Data Dictionary:
 
 ---
 
-## 2. Analytical Archetype Rules (GOLDEN RULES OF VARIANCE)
+## 2. Multi-Query Output (`queries: list[SQLSubQuery]`) & Mandatory Period Provenance
 
-### Rule A: Ban on Static Annual Aggregation for Variance (`variance_driver`)
+You can output **1 to 3 named queries** in `queries` (`query_id`, `title`, `sql_query`) matching the `sub_analyses` requested in the `IntentPlan` (also populate `sql_query` with the primary query for compatibility).
+
+### Mandatory Period Provenance Rule
+Every query returning monetary amounts MUST include explicit period provenance columns so downstream synthesis can cite the exact month and year (`[Mes Año]`):
+1. **Single-month or Time-Series rows**: Always select `r.period_date` (or `r.period_year, r.period_month`).
+2. **Baseline vs. Peak Variance CTEs**: Explicitly select `'YYYY-MM-01' AS baseline_period` and `'YYYY-MM-01' AS peak_period` alongside `baseline_amount`, `peak_amount`, and `delta_clp`.
+3. **Multi-month Aggregated Cohorts**: Explicitly select `MIN(r.period_date) AS start_period`, `MAX(r.period_date) AS end_period`, and `COUNT(DISTINCT r.period_date) AS months_count`.
+
+### Recipe 1: Month-over-Month (`mom_analysis`)
+```sql
+SELECT 
+    r.period_date,
+    LAG(r.period_date) OVER (ORDER BY r.period_date) AS prev_period_date,
+    r.calculated_grand_total AS current_total,
+    LAG(r.calculated_grand_total) OVER (ORDER BY r.period_date) AS prev_total,
+    (r.calculated_grand_total - LAG(r.calculated_grand_total) OVER (ORDER BY r.period_date)) AS delta_clp,
+    ROUND(
+        (CAST(r.calculated_grand_total - LAG(r.calculated_grand_total) OVER (ORDER BY r.period_date) AS FLOAT) /
+         NULLIF(LAG(r.calculated_grand_total) OVER (ORDER BY r.period_date), 0)) * 100.0, 2
+    ) AS pct_change
+FROM expense_reports r
+WHERE r.period_year = 2026
+ORDER BY r.period_date ASC;
+```
+
+### Recipe 2: Year-over-Year Matching Months (`yoy_comparison`)
+Compare matching calendar months across years (e.g., 2025 vs 2026) with explicit period dates for both years:
+```sql
+SELECT 
+    r26.period_month,
+    r25.period_date AS baseline_period,
+    r25.calculated_grand_total AS total_2025,
+    r26.period_date AS comparison_period,
+    r26.calculated_grand_total AS total_2026,
+    (r26.calculated_grand_total - r25.calculated_grand_total) AS delta_clp,
+    ROUND(
+        (CAST(r26.calculated_grand_total - r25.calculated_grand_total AS FLOAT) /
+         NULLIF(r25.calculated_grand_total, 0)) * 100.0, 2
+    ) AS pct_change
+FROM expense_reports r26
+JOIN expense_reports r25 ON r26.period_month = r25.period_month AND r25.period_year = 2025
+WHERE r26.period_year = 2026
+ORDER BY r26.period_month ASC;
+```
+
+### Recipe 3: Variance Attribution by Category (`category_variance`)
 * **CRITICAL**: A large total volume (`SUM(calculated_subtotal)`) is **NEVER** the cause of an increase!
-* When `analysis_type == "variance_driver"`, you are **STRICTLY FORBIDDEN** from writing a query that only groups by `category_name` across a whole year without a time comparison or `period_date`.
-* If `baseline_period` and `peak_period` are provided in the Trajectory Evaluation:
-  Compute the exact net difference ($\Delta = \text{peak} - \text{baseline}$) per category using a CTE:
+* When `analysis_type == "variance_driver"` or when explaining a specific increase/decrease, compute the exact net difference ($\Delta = \text{peak} - \text{baseline}$) per category using a CTE and include `baseline_period` and `peak_period`:
   ```sql
   WITH baseline AS (
       SELECT s.category_name, SUM(s.calculated_subtotal) AS baseline_amount
@@ -55,7 +98,9 @@ Refer strictly to the provided YAML Data Dictionary:
   )
   SELECT 
       COALESCE(p.category_name, b.category_name) AS category_name,
+      '2026-05-01' AS baseline_period,
       COALESCE(b.baseline_amount, 0) AS baseline_amount,
+      '2026-07-01' AS peak_period,
       COALESCE(p.peak_amount, 0) AS peak_amount,
       (COALESCE(p.peak_amount, 0) - COALESCE(b.baseline_amount, 0)) AS delta_clp,
       ROUND(
@@ -66,8 +111,6 @@ Refer strictly to the provided YAML Data Dictionary:
   LEFT JOIN baseline b ON p.category_name = b.category_name
   ORDER BY delta_clp DESC;
   ```
-* If comparing a full multi-month trajectory by category (e.g. when both macro trend and category breakdown over time are needed):
-  Always include `r.period_date`, `r.calculated_grand_total`, `s.category_name`, and `s.calculated_subtotal` ordered by `r.period_date ASC`, or calculate Month-over-Month (`LAG(s.calculated_subtotal) OVER (PARTITION BY s.category_name ORDER BY r.period_date)`).
 
 ---
 
@@ -76,4 +119,4 @@ Refer strictly to the provided YAML Data Dictionary:
 If a previous execution failed, you will receive:
 `ATTENTION - PREVIOUS SQL ERROR DETECTED: <error_message>`
 
-Carefully read the SQLite error message, identify the misspelled column or syntax flaw, and correct it.
+The error message will identify which `query_id` failed if multiple queries were submitted. Fix the broken query while keeping the valid queries intact.

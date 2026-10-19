@@ -342,3 +342,119 @@ def test_variance_query_offline_circuit_breaker_at_hop_1(monkeypatch):
     assert result.error_history[0]["node"] == "trajectory_inspector_node"
     assert "DataGatewayUnavailableError:" in result.error_history[0]["error_message"]
 
+
+# ============================================================================
+# 5. Multi-Analysis Orchestration & Multi-Panel Sandbox Tests
+# ============================================================================
+
+
+def test_route_after_planner_multi_analysis_and_comparative_cohort():
+    """Verify comparative_cohort and multi-analysis plans (len(sub_analyses) > 1) route to trajectory_inspector."""
+    cohort_state: DataAnalystState = {
+        "user_query": "Compara 2025 vs 2026",
+        "intent_plan": IntentPlan(
+            is_authorized_query=True,
+            analysis_type="comparative_cohort",
+            sub_analyses=["Comparación YoY 2025 vs 2026"],
+        ),
+    }
+    assert route_after_planner(cohort_state) == "trajectory_inspector"
+
+    multi_state: DataAnalystState = {
+        "user_query": "Revisión mes a mes 2026 y comparación YoY",
+        "intent_plan": IntentPlan(
+            is_authorized_query=True,
+            analysis_type="time_series_trend",
+            sub_analyses=[
+                "Revisión mes a mes (MoM) de 2026",
+                "Comparación interanual (YoY) 2025 vs 2026",
+            ],
+        ),
+    }
+    assert route_after_planner(multi_state) == "trajectory_inspector"
+
+
+def test_sql_gateway_multi_query_targeted_error_on_partial_failure(monkeypatch):
+    """Verify sql_gateway_node executes queries sequentially and names the exact query_id on failure."""
+    from analytics.nodes import sql_gateway_node
+
+    call_log: list[str] = []
+
+    def _mock_gateway(sql: str):
+        call_log.append(sql)
+        if "BAD_COLUMN" in sql:
+            return None, "Gateway rejected SQL (400): no such column: BAD_COLUMN"
+        return [{"period_date": "2026-07-01", "current_total": 56907702}], None
+
+    monkeypatch.setattr("analytics.nodes.query_data_gateway", _mock_gateway)
+
+    state: DataAnalystState = {
+        "user_query": "MoM y YoY",
+        "sql_queries": [
+            {
+                "query_id": "mom_2026",
+                "title": "Revisión MoM 2026",
+                "sql_query": "SELECT period_date, calculated_grand_total AS current_total FROM expense_reports",
+            },
+            {
+                "query_id": "yoy_comparison",
+                "title": "Comparación YoY",
+                "sql_query": "SELECT BAD_COLUMN FROM expense_reports",
+            },
+        ],
+        "current_sql": "SELECT period_date FROM expense_reports",
+        "retry_count": 0,
+        "max_retries": 2,
+        "error_history": [],
+    }
+
+    res = sql_gateway_node(state)
+    assert len(call_log) == 2
+    assert res["sql_results"] is None
+    assert res["multi_sql_results"] is None
+    assert res["retry_count"] == 1
+    assert len(res["error_history"]) == 1
+    err = res["error_history"][0]
+    assert "yoy_comparison" in err["error_message"]
+    assert "BAD_COLUMN" in err["error_message"]
+
+
+def test_sandbox_multi_panel_dict_dataset_execution():
+    """Verify run_plotting_sandbox accepts a dict of named datasets and renders a multi-panel chart."""
+    import os
+    from analytics.sandbox import run_plotting_sandbox
+
+    multi_data = {
+        "mom_2026": [
+            {"period_date": "2026-05-01", "total": 49387905},
+            {"period_date": "2026-07-01", "total": 56907702},
+        ],
+        "yoy_comparison": [
+            {"period_month": 7, "baseline_period": "2025-07-01", "total_2025": 48996124, "comparison_period": "2026-07-01", "total_2026": 56907702},
+        ],
+    }
+
+    code = """
+import json
+import matplotlib.pyplot as plt
+
+with open("dataset.json", "r", encoding="utf-8") as f:
+    data = json.load(f)
+
+assert isinstance(data, dict), "Expected dict in dataset.json for multi-analysis"
+fig, axes = plt.subplots(len(data), 1, figsize=(8, 6))
+axes[0].plot([r["period_date"] for r in data["mom_2026"]], [r["total"] / 1e6 for r in data["mom_2026"]], marker="o")
+axes[0].set_title("MoM 2026")
+axes[1].bar(["Jul 2025", "Jul 2026"], [data["yoy_comparison"][0]["total_2025"] / 1e6, data["yoy_comparison"][0]["total_2026"] / 1e6])
+axes[1].set_title("YoY Julio 2025 vs Julio 2026")
+plt.tight_layout()
+plt.savefig("output.png", dpi=100)
+"""
+    sandbox_res = run_plotting_sandbox(code, multi_data)
+    assert sandbox_res.success is True
+    assert sandbox_res.error_message is None
+    assert sandbox_res.chart_path is not None
+    assert os.path.exists(sandbox_res.chart_path)
+    # Clean up generated test chart
+    os.remove(sandbox_res.chart_path)
+

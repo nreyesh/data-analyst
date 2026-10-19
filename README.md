@@ -5,7 +5,7 @@ An autonomous, self-healing pipeline for extracting, validating, and persistentl
 This repository implements **Phase 1**, **Phase 2**, and **Phase 3** of the project roadmap:
 * **Phase 1 (PDF Extractor & Cross-Validation)**: LangGraph state machine utilizing Google Gemini multimodal vision, deterministic integer financial math validation, and self-healing error correction loops.
 * **Phase 2 (Storage Layer & Spool Sync)**: Persistent FastAPI backend service and normalized 3NF SQLite database with UUIDv7 primary keys, automatic duplicate overwrites (upserts), and resilient cloud spooling.
-* **Phase 3 (Analytics & Plotting Engine)**: Autonomous LangGraph SQL-and-Matplotlib analytical agent featuring a two-hop variance analysis loop, 3-layer schema privacy defense, strict HTTP-only Data Gateway isolation (zero direct DB access), and an offline circuit breaker.
+* **Phase 3 (Analytics & Plotting Engine)**: Autonomous LangGraph SQL-and-Matplotlib analytical agent featuring multi-analysis orchestration (1–3 SQL queries per request for MoM, YoY, and category variance), mandatory `[Mes Año]` period citations, a two-hop variance analysis loop, 3-layer schema privacy defense, strict HTTP-only Data Gateway isolation (zero direct DB access), and an offline circuit breaker.
 
 ---
 
@@ -174,6 +174,9 @@ python -m analytics.cli "Muestra la evolución del gasto total mensual en 2025. 
 # Run two-hop variance attribution (with interactive clarification if multi-phase)
 python -m analytics.cli "¿A qué se debe el aumento del gasto en el 2026?"
 
+# Run compound multi-analysis (MoM + YoY + Category Variance with [Mes Año] citations & multi-panel subplots)
+python -m analytics.cli "Haz una revisión mes a mes del 2026, compáralo YoY con 2025 y dime qué categorías explican el último aumento"
+
 # Or query via the high-level REST endpoint
 curl -s -X POST http://localhost:8000/api/v1/analytics/query \
      -H "Content-Type: application/json" \
@@ -207,10 +210,10 @@ sqlite3 -header -column data/storage/expenses.db "SELECT name, normalized_name, 
 
 ## 🧪 Running the Test Suite
 
-The test suite contains 81 offline automated tests (covering Phase 1 extraction, Phase 2 persistence/spooling, and Phase 3 analytics/isolation) that execute in seconds without calling the live Gemini API:
+The test suite contains 85 offline automated tests (covering Phase 1 extraction, Phase 2 persistence/spooling, and Phase 3 analytics/multi-query/isolation) that execute in seconds without calling the live Gemini API:
 
 ```bash
-# Run all 81 tests
+# Run all 85 tests
 python -m pytest -v
 
 # Run Phase 1 & Phase 3 workflow/unit tests

@@ -23,6 +23,7 @@ from analytics.state import (
     DataAnalystState,
     ExecutionError,
     IntentPlan,
+    SQLSubQuery,
     TrajectoryEvaluation,
 )
 
@@ -78,10 +79,17 @@ def generate_content_with_fallback(
 
 
 class SQLCoderOutput(BaseModel):
-    """Structured output schema for SQL generation."""
+    """Structured output schema for single or multi-query SQL generation."""
 
     reasoning: str = Field(description="Brief explanation of the query logic")
-    sql_query: str = Field(description="Valid SQLite SELECT query")
+    sql_query: str = Field(
+        default="",
+        description="Primary read-only SQLite SELECT query (used when a single query suffices)",
+    )
+    queries: list[SQLSubQuery] = Field(
+        default_factory=list,
+        description="1 to 3 named read-only SQLite queries when conducting multiple analyses or comparisons (e.g. MoM + YoY + Variance).",
+    )
 
 
 class VisualizerOutput(BaseModel):
@@ -151,26 +159,11 @@ def planner_node(state: DataAnalystState, client: genai.Client | None = None) ->
 
 
 def trajectory_inspector_node(state: DataAnalystState) -> dict[str, Any]:
-    """Execute Hop 1 macro query on expense_reports to verify monthly grand totals."""
-    plan = state.get("intent_plan")
-    time_scope = (plan.time_scope if plan else "") or state.get("user_query", "")
-    user_choice = state.get("user_clarification_choice") or ""
-
-    # Determine if a single year is targeted or multi-year comparison
-    years_found = sorted(set(re.findall(r"\b(202\d)\b", f"{time_scope} {user_choice}")))
-
-    if len(years_found) == 1:
-        year = int(years_found[0])
-        sql = (
-            "SELECT period_date, period_year, period_month, calculated_grand_total "
-            f"FROM expense_reports WHERE period_year = {year} "
-            "ORDER BY period_date ASC"
-        )
-    else:
-        sql = (
-            "SELECT period_date, period_year, period_month, calculated_grand_total "
-            "FROM expense_reports ORDER BY period_date ASC"
-        )
+    """Execute Hop 1 macro query on expense_reports to verify monthly grand totals across all years."""
+    sql = (
+        "SELECT period_date, period_year, period_month, calculated_grand_total "
+        "FROM expense_reports ORDER BY period_date ASC"
+    )
 
     rows, error_msg = query_data_gateway(sql=sql)
     if error_msg is not None:
@@ -222,6 +215,7 @@ def trajectory_evaluator_node(
     contents = [
         f"Original User Question: {state['user_query']}\n"
         f"Planner Analysis Goal: {plan.analysis_goal if plan else ''}\n"
+        f"Sub-Analyses Requested: {plan.sub_analyses if plan and plan.sub_analyses else 'Single analysis'}\n"
         f"Time Scope: {plan.time_scope if plan else ''}\n"
         f"User Clarification Choice: {user_choice or 'None'}\n"
         f"Verified Macro Monthly Totals (expense_reports):\n{json.dumps(trajectory, ensure_ascii=False, indent=2)}"
@@ -303,12 +297,12 @@ def clarification_node(state: DataAnalystState) -> dict[str, Any]:
 
 
 # ============================================================================
-# 2. SQL Coder Node (with Self-Healing & Delta CTEs)
+# 2. SQL Coder Node (with Self-Healing, Multi-Query & Delta CTEs)
 # ============================================================================
 
 
 def sql_coder_node(state: DataAnalystState, client: genai.Client | None = None) -> dict[str, Any]:
-    """Generate or correct SQLite SELECT query using IntentPlan, TrajectoryEvaluation, and Data Dictionary."""
+    """Generate or correct 1 to 3 read-only SQLite SELECT queries using IntentPlan, TrajectoryEvaluation, and Data Dictionary."""
     gemini_client = client or get_gemini_client()
     system_instruction = load_prompt_template("sql_coder_system.md")
     data_dict_yaml = load_data_dictionary_str()
@@ -327,6 +321,7 @@ def sql_coder_node(state: DataAnalystState, client: genai.Client | None = None) 
     plan_summary = (
         f"Goal: {plan.analysis_goal}\n"
         f"Analysis Type: {plan.analysis_type}\n"
+        f"Sub-Analyses: {plan.sub_analyses}\n"
         f"Temporal Resolution: {plan.temporal_resolution}\n"
         f"Tables: {plan.relevant_tables}\n"
         f"Time Scope: {plan.time_scope}"
@@ -347,9 +342,10 @@ def sql_coder_node(state: DataAnalystState, client: genai.Client | None = None) 
             f"Trajectory Summary: {eval_res.evaluation_summary}\n"
             f"Baseline Period: {eval_res.baseline_period}\n"
             f"Peak/Target Period: {eval_res.peak_period}\n"
-            "IMPORTANT: Generate a query that calculates the exact net change (delta_clp) "
-            "between the Baseline Period and Peak/Target Period (or across the selected months) "
-            "by category, ordered by delta_clp DESC. NEVER aggregate the whole year into a single static sum!"
+            "IMPORTANT: Ensure every comparison query explicitly selects period provenance columns "
+            "(e.g., baseline_period, peak_period, period_date, or start_period/end_period/months_count). "
+            "If multiple sub-analyses are requested (e.g. MoM + YoY), populate `queries` with a separate "
+            "named SQLSubQuery for each analysis!"
         )
 
     # Check for previous error feedback
@@ -369,54 +365,130 @@ def sql_coder_node(state: DataAnalystState, client: genai.Client | None = None) 
     )
 
     output = SQLCoderOutput.model_validate_json(response.text)
-    logger.info("SQL Coder generated query: %s", output.sql_query)
+
+    if output.queries:
+        capped_queries = output.queries[:3]
+        sql_queries = [q.model_dump() for q in capped_queries]
+        if len(sql_queries) == 1:
+            current_sql = sql_queries[0]["sql_query"]
+        else:
+            current_sql = "\n\n".join(
+                f"-- [{q['query_id']}] {q['title']}\n{q['sql_query']}"
+                for q in sql_queries
+            )
+    else:
+        default_title = (
+            plan.analysis_goal
+            if plan and plan.analysis_goal
+            else "Análisis Principal"
+        )
+        sql_queries = [
+            {
+                "query_id": "primary",
+                "title": default_title,
+                "sql_query": output.sql_query,
+            }
+        ]
+        current_sql = output.sql_query
+
+    logger.info(
+        "SQL Coder generated %d query(ies): %s",
+        len(sql_queries),
+        [q["query_id"] for q in sql_queries],
+    )
 
     return {
-        "current_sql": output.sql_query,
+        "current_sql": current_sql,
+        "sql_queries": sql_queries,
     }
 
 
 # ============================================================================
-# 3. SQL Gateway Execution Node
+# 3. SQL Gateway Execution Node (Single & Multi-Query Execution)
 # ============================================================================
 
 
 def sql_gateway_node(state: DataAnalystState) -> dict[str, Any]:
-    """Dispatch SQL query to Data Gateway Proxy and evaluate execution result."""
-    sql = state.get("current_sql") or ""
-    rows, error_msg = query_data_gateway(sql=sql)
+    """Dispatch 1 to 3 SQL queries to Data Gateway Proxy and evaluate execution results."""
+    sql_queries = state.get("sql_queries")
+    if not sql_queries:
+        fallback_sql = state.get("current_sql") or ""
+        sql_queries = [
+            {
+                "query_id": "primary",
+                "title": "Análisis Principal",
+                "sql_query": fallback_sql,
+            }
+        ]
 
-    if error_msg is not None:
-        if is_gateway_unavailable_error(error_msg):
+    multi_results: dict[str, list[dict[str, Any]]] = {}
+    tagged_results: list[dict[str, Any]] = []
+
+    for q in sql_queries:
+        q_id = q.get("query_id", "primary")
+        q_title = q.get("title", q_id)
+        q_sql = q.get("sql_query", "")
+
+        rows, error_msg = query_data_gateway(sql=q_sql)
+
+        if error_msg is not None:
+            if is_gateway_unavailable_error(error_msg):
+                err_record = ExecutionError(
+                    node="sql_gateway_node",
+                    error_message=error_msg,
+                    attempt=1,
+                )
+                logger.error("Data Gateway unreachable during SQL execution: %s", error_msg)
+                return {
+                    "sql_results": None,
+                    "multi_sql_results": None,
+                    "gateway_unavailable": True,
+                    "error_history": [err_record],
+                }
+
+            attempt = state.get("retry_count", 0) + 1
+            if len(sql_queries) > 1 or q_id != "primary":
+                formatted_err = f"[Query '{q_id}' ({q_title})] {error_msg} | Failing SQL: {q_sql}"
+            else:
+                formatted_err = error_msg
+
             err_record = ExecutionError(
                 node="sql_gateway_node",
-                error_message=error_msg,
-                attempt=1,
+                error_message=formatted_err,
+                attempt=attempt,
             )
-            logger.error("Data Gateway unreachable during SQL execution: %s", error_msg)
+            logger.warning("Gateway query '%s' attempt %d failed: %s", q_id, attempt, error_msg)
             return {
                 "sql_results": None,
-                "gateway_unavailable": True,
+                "multi_sql_results": None,
+                "gateway_unavailable": False,
                 "error_history": [err_record],
+                "retry_count": attempt,
             }
 
-        attempt = state.get("retry_count", 0) + 1
-        err_record = ExecutionError(
-            node="sql_gateway_node",
-            error_message=error_msg,
-            attempt=attempt,
+        clean_rows = rows or []
+        multi_results[q_id] = clean_rows
+        tagged_results.append(
+            {
+                "query_id": q_id,
+                "title": q_title,
+                "rows": clean_rows,
+            }
         )
-        logger.warning("Gateway query attempt %d failed: %s", attempt, error_msg)
-        return {
-            "sql_results": None,
-            "gateway_unavailable": False,
-            "error_history": [err_record],
-            "retry_count": attempt,
-        }
 
-    logger.info("Gateway query succeeded: fetched %d rows", len(rows) if rows else 0)
+    if len(sql_queries) == 1:
+        first_id = sql_queries[0].get("query_id", "primary")
+        final_sql_results = multi_results.get(first_id, [])
+    else:
+        final_sql_results = tagged_results
+
+    logger.info(
+        "Gateway executed %d query(ies) successfully",
+        len(sql_queries),
+    )
     return {
-        "sql_results": rows or [],
+        "sql_results": final_sql_results,
+        "multi_sql_results": multi_results,
         "gateway_unavailable": False,
         "retry_count": 0,  # reset retry counter for subsequent nodes
     }
@@ -428,7 +500,7 @@ def sql_gateway_node(state: DataAnalystState) -> dict[str, Any]:
 
 
 def visualizer_node(state: DataAnalystState, client: genai.Client | None = None) -> dict[str, Any]:
-    """Generate standalone Matplotlib script reading from dataset.json."""
+    """Generate standalone Matplotlib script reading from dataset.json (single or multi-panel)."""
     gemini_client = client or get_gemini_client()
     system_instruction = load_prompt_template("visualizer_system.md")
 
@@ -440,7 +512,7 @@ def visualizer_node(state: DataAnalystState, client: genai.Client | None = None)
     )
 
     rows = state.get("sql_results") or []
-    sample_data = rows[:3]
+    multi_results = state.get("multi_sql_results") or {}
     plan = state.get("intent_plan")
     eval_res = state.get("trajectory_evaluation")
 
@@ -452,12 +524,31 @@ def visualizer_node(state: DataAnalystState, client: genai.Client | None = None)
             f"Baseline Period: {eval_res.baseline_period} -> Peak Period: {eval_res.peak_period}\n"
         )
 
+    if len(multi_results) > 1:
+        sample_multi = {k: v[:3] for k, v in multi_results.items()}
+        counts_multi = {k: len(v) for k, v in multi_results.items()}
+        dataset_description = (
+            f"MULTI-ANALYSIS MODE (len={len(multi_results)} datasets): `dataset.json` is a JSON DICTIONARY "
+            f"keyed by query_id: {list(multi_results.keys())}.\n"
+            f"Render a multi-panel figure (`fig, axes = plt.subplots({len(multi_results)}, 1, figsize=(10, {4 * len(multi_results)}))`) "
+            "with one subplot per dataset and save to 'output.png'!\n"
+            f"Sample Rows per Key in dataset.json: {json.dumps(sample_multi, ensure_ascii=False)}\n"
+            f"Row Counts per Key in dataset.json: {json.dumps(counts_multi, ensure_ascii=False)}"
+        )
+    else:
+        sample_data = rows[:3]
+        dataset_description = (
+            f"SINGLE-ANALYSIS MODE: `dataset.json` is a JSON LIST of row dictionaries.\n"
+            f"Sample Row Structure from dataset.json: {json.dumps(sample_data, ensure_ascii=False)}\n"
+            f"Total Data Rows in dataset.json: {len(rows)}"
+        )
+
     contents = [
         f"Goal: {plan.visualization_goal or plan.analysis_goal if plan else state['user_query']}\n"
+        f"Sub-Analyses: {plan.sub_analyses if plan and plan.sub_analyses else []}\n"
         f"{eval_context}"
         f"Suggested Chart Type: {plan.suggested_chart_type if plan else 'auto'}\n"
-        f"Sample Row Structure from dataset.json: {json.dumps(sample_data, ensure_ascii=False)}\n"
-        f"Total Data Rows in dataset.json: {len(rows)}"
+        f"{dataset_description}"
     ]
 
     errors = state.get("error_history", [])
@@ -491,7 +582,11 @@ def visualizer_node(state: DataAnalystState, client: genai.Client | None = None)
 def sandbox_runner_node(state: DataAnalystState) -> dict[str, Any]:
     """Execute visualization script inside the isolated subprocess sandbox."""
     code = state.get("visualization_code") or ""
-    dataset = state.get("sql_results") or []
+    multi_results = state.get("multi_sql_results")
+    if multi_results and len(multi_results) > 1:
+        dataset: list[dict[str, Any]] | dict[str, Any] = multi_results
+    else:
+        dataset = state.get("sql_results") or []
 
     result = run_plotting_sandbox(
         script_code=code,
@@ -520,7 +615,7 @@ def sandbox_runner_node(state: DataAnalystState) -> dict[str, Any]:
 
 
 # ============================================================================
-# 6. Synthesizer Node (with Zero Schema Policy & Variance Attribution)
+# 6. Synthesizer Node (with Zero Schema Policy, Variance Attribution & Period Citations)
 # ============================================================================
 
 
@@ -571,6 +666,8 @@ def synthesizer_node(state: DataAnalystState, client: genai.Client | None = None
     user_choice = state.get("user_clarification_choice")
 
     trajectory_context = ""
+    if plan and plan.sub_analyses:
+        trajectory_context += f"Requested Sub-Analyses: {json.dumps(plan.sub_analyses, ensure_ascii=False)}\n"
     if trajectory:
         trajectory_context += f"Macro Monthly Totals: {json.dumps(trajectory, ensure_ascii=False)}\n"
     if eval_res:

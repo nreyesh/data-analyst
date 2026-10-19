@@ -50,8 +50,14 @@ def route_after_planner(
         logger.info("Planner requested clarification for query '%s'", state.get("user_query"))
         return "clarification"
 
-    if plan and plan.analysis_type == "variance_driver":
-        logger.info("Routing variance_driver query to trajectory_inspector (Hop 1)")
+    if plan and (
+        plan.analysis_type in ("variance_driver", "comparative_cohort")
+        or len(plan.sub_analyses) > 1
+    ):
+        logger.info(
+            "Routing %s / multi-analysis query to trajectory_inspector (Hop 1)",
+            plan.analysis_type,
+        )
         return "trajectory_inspector"
 
     return "sql_coder"
@@ -281,7 +287,9 @@ def run_analysis(
             "trajectory_evaluation": None,
             "user_clarification_choice": None,
             "current_sql": None,
+            "sql_queries": None,
             "sql_results": None,
+            "multi_sql_results": None,
             "visualization_code": None,
             "chart_file_path": None,
             "final_markdown": None,

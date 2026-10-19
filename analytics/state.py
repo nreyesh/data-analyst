@@ -50,6 +50,10 @@ class IntentPlan(BaseModel):
         default="",
         description="Summary of the business question to solve (only populated if authorized).",
     )
+    sub_analyses: list[str] = Field(
+        default_factory=list,
+        description="1 to 3 concrete analytical sub-tasks when the user requests multiple analyses or comparisons (e.g., ['Revisión mensual (MoM) 2026', 'Comparación interanual (YoY) 2025 vs 2026']).",
+    )
     relevant_tables: list[str] = Field(
         default_factory=list,
         description="Tables required (e.g. ['expense_reports', 'expense_sections'])",
@@ -80,6 +84,20 @@ class IntentPlan(BaseModel):
     candidate_options: list[str] = Field(
         default_factory=list,
         description="2 to 3 concrete interpretation options for the user to select from.",
+    )
+
+
+class SQLSubQuery(BaseModel):
+    """Named read-only SQLite query corresponding to an analytical sub-task."""
+
+    query_id: str = Field(
+        description="Short snake_case identifier for this dataset (e.g. 'mom_2026', 'yoy_2025_vs_2026', 'variance_may_jul')."
+    )
+    title: str = Field(
+        description="Human-readable Spanish title for this analysis/comparison (e.g. 'Evolución Mensual (MoM) 2026')."
+    )
+    sql_query: str = Field(
+        description="Valid read-only SQLite SELECT or WITH...SELECT query including explicit period_date provenance columns."
     )
 
 
@@ -127,7 +145,9 @@ class DataAnalystState(TypedDict, total=False):
     trajectory_evaluation: Optional[TrajectoryEvaluation]
     user_clarification_choice: Optional[str]
     current_sql: Optional[str]
+    sql_queries: Optional[list[dict[str, str]]]
     sql_results: Optional[list[dict[str, Any]]]
+    multi_sql_results: Optional[dict[str, list[dict[str, Any]]]]
     visualization_code: Optional[str]
     chart_file_path: Optional[str]
     final_markdown: Optional[str]

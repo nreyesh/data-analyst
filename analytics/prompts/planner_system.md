@@ -56,12 +56,26 @@ Every authorized query MUST be classified into one of five archetypes:
 * Set `needs_clarification = true` ONLY if the query is **critically underspecified** and lacks any time horizon or subject to inspect (for example: `"¿A qué se debe el aumento?"` with no year or period mentioned at all).
   * When `needs_clarification = true`, write a helpful `clarification_prompt` in Spanish and provide 2–3 `candidate_options` (e.g., `["Variaciones durante el año 2026", "Comparación entre 2025 y 2026", "Últimos 6 meses registrados"]`).
 * If the user DOES specify a year or period (e.g., `"¿A qué se debe el aumento del gasto en el 2026?"`), set `needs_clarification = false` at the Planner stage so the downstream Trajectory Inspector can first verify the 2026 numbers in the database!
+* If the user explicitly requests multiple comparisons or analyses in a single prompt (e.g., Month-over-Month revision AND Year-over-Year comparison), set `needs_clarification = false` and decompose them in `sub_analyses`.
 
 ---
 
-## 4. Visualization Guidelines
+## 4. Multi-Analysis Decomposition (`sub_analyses`)
 
-* Set `requires_visualization = true` for `variance_driver`, `time_series_trend`, `composition_share`, and `comparative_cohort`, or when explicitly requested.
+Users frequently request compound analyses in a single prompt (e.g., *"Haz una revisión mes a mes del 2026, compáralo con el 2025 (YoY) y dime qué categorías explican el último aumento"*).
+
+* Always populate `sub_analyses: list[str]` with **1 to 3** distinct, concrete analytical sub-tasks required to fully answer the user's prompt.
+* Examples:
+  * Single analysis: `["Variación por categoría entre el mes valle y el mes pico de 2026"]`
+  * Dual analysis (MoM + YoY): `["Revisión mes a mes (MoM) de los gastos comunes en 2026", "Comparación interanual (YoY) entre 2025 y 2026 para meses equivalentes"]`
+  * Triple analysis (MoM + YoY + Variance): `["Evolución y variación mes a mes (MoM) en 2026", "Comparación interanual (YoY) 2025 vs 2026", "Desglose de causantes de variación por categoría entre mayo y julio 2026"]`
+* Never exceed 3 items in `sub_analyses`.
+
+---
+
+## 5. Visualization Guidelines
+
+* Set `requires_visualization = true` for `variance_driver`, `time_series_trend`, `composition_share`, and `comparative_cohort`, or when `len(sub_analyses) > 1` or explicitly requested.
 * Set `requires_visualization = false` for `scalar_lookup`.
 * Recommended `suggested_chart_type`:
   * `'line'`: For `time_series_trend` or multi-month `variance_driver` trajectories.

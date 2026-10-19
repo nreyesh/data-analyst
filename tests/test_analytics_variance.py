@@ -343,3 +343,156 @@ def test_api_route_returns_clarification_payload():
         assert body["needs_clarification"] is True
         assert body["thread_id"] == "thread_test123"
         assert len(body["candidate_options"]) == 2
+
+
+# ============================================================================
+# Task 4.1 (Multi-Analysis & Period Citations): End-to-End 3-Query Test
+# ============================================================================
+
+
+def test_end_to_end_multi_analysis_mom_yoy_and_variance_with_period_citations(gateway_bridge):
+    """Verify compound prompt executes 3 SQL queries (MoM + YoY + Category Variance) through the
+    HTTP Data Gateway and returns tagged datasets with explicit period provenance and [Mes Año] citations.
+    """
+    plan_json = IntentPlan(
+        is_authorized_query=True,
+        analysis_type="variance_driver",
+        temporal_resolution="monthly",
+        sub_analyses=[
+            "Revisión mes a mes (MoM) de los gastos comunes en 2026",
+            "Comparación interanual (YoY) entre 2025 y 2026 para meses equivalentes (julio a septiembre)",
+            "Causantes de variación por categoría entre el mínimo de mayo 2026 y el pico de julio 2026",
+        ],
+        analysis_goal="Realizar revisión MoM 2026, comparación YoY 2025 vs 2026 y desglose de variación Mayo-Julio 2026",
+        relevant_tables=["expense_reports", "expense_sections"],
+        time_scope="2025-2026",
+        requires_visualization=False,
+    ).model_dump_json()
+
+    eval_json = TrajectoryEvaluation(
+        premise_status="validated",
+        evaluation_summary=(
+            "En [Julio 2025] el gasto fue de $48.996.124 CLP frente a $56.907.702 CLP en [Julio 2026]. "
+            "Dentro de 2026, el gasto bajó de $57.063.002 CLP [Enero 2026] a $49.387.905 CLP [Mayo 2026] "
+            "y subió a $56.907.702 CLP [Julio 2026]."
+        ),
+        baseline_period="2026-05-01",
+        peak_period="2026-07-01",
+        needs_clarification=False,
+    ).model_dump_json()
+
+    mom_sql = """
+    SELECT 
+        r.period_date,
+        LAG(r.period_date) OVER (ORDER BY r.period_date) AS prev_period_date,
+        r.calculated_grand_total AS current_total,
+        LAG(r.calculated_grand_total) OVER (ORDER BY r.period_date) AS prev_total,
+        (r.calculated_grand_total - LAG(r.calculated_grand_total) OVER (ORDER BY r.period_date)) AS delta_clp
+    FROM expense_reports r
+    WHERE r.period_year = 2026
+    ORDER BY r.period_date ASC
+    """
+
+    yoy_sql = """
+    SELECT 
+        r26.period_month,
+        r25.period_date AS baseline_period,
+        r25.calculated_grand_total AS total_2025,
+        r26.period_date AS comparison_period,
+        r26.calculated_grand_total AS total_2026,
+        (r26.calculated_grand_total - r25.calculated_grand_total) AS delta_clp
+    FROM expense_reports r26
+    JOIN expense_reports r25 ON r26.period_month = r25.period_month AND r25.period_year = 2025
+    WHERE r26.period_year = 2026
+    ORDER BY r26.period_month ASC
+    """
+
+    variance_sql = """
+    WITH baseline AS (
+        SELECT s.category_name, SUM(s.calculated_subtotal) AS baseline_amount
+        FROM expense_sections s
+        JOIN expense_reports r ON s.report_id = r.id
+        WHERE r.period_date = '2026-05-01'
+        GROUP BY s.category_name
+    ),
+    peak AS (
+        SELECT s.category_name, SUM(s.calculated_subtotal) AS peak_amount
+        FROM expense_sections s
+        JOIN expense_reports r ON s.report_id = r.id
+        WHERE r.period_date = '2026-07-01'
+        GROUP BY s.category_name
+    )
+    SELECT 
+        COALESCE(p.category_name, b.category_name) AS category_name,
+        '2026-05-01' AS baseline_period,
+        COALESCE(b.baseline_amount, 0) AS baseline_amount,
+        '2026-07-01' AS peak_period,
+        COALESCE(p.peak_amount, 0) AS peak_amount,
+        (COALESCE(p.peak_amount, 0) - COALESCE(b.baseline_amount, 0)) AS delta_clp
+    FROM peak p
+    LEFT JOIN baseline b ON p.category_name = b.category_name
+    ORDER BY delta_clp DESC
+    """
+
+    multi_sql_output_json = json.dumps(
+        {
+            "reasoning": "Generate 3 dedicated queries for MoM 2026, YoY 2025 vs 2026, and May-July 2026 category variance.",
+            "queries": [
+                {"query_id": "mom_2026", "title": "Revisión Mes a Mes (MoM) 2026", "sql_query": mom_sql},
+                {"query_id": "yoy_2025_2026", "title": "Comparación Interanual (YoY) 2025 vs 2026", "sql_query": yoy_sql},
+                {"query_id": "variance_may_jul_2026", "title": "Causantes de Variación Mayo vs Julio 2026", "sql_query": variance_sql},
+            ],
+            "sql_query": mom_sql,
+        }
+    )
+
+    synth_markdown = (
+        "### 1. Revisión Mes a Mes (MoM) [Enero – Septiembre 2026]\n"
+        "El gasto común inició en **$57.063.002 CLP [Enero 2026]**, descendió a su valle en "
+        "**$49.387.905 CLP [Mayo 2026]**, y repuntó a **$56.907.702 CLP [Julio 2026]** (+$7.519.797 CLP).\n\n"
+        "### 2. Comparación Interanual (YoY) [Julio – Septiembre 2025 vs 2026]\n"
+        "- **Julio**: **$48.996.124 CLP [Julio 2025]** vs **$56.907.702 CLP [Julio 2026]** (+$7.911.578 CLP).\n\n"
+        "### 3. Causantes de Variación por Categoría ([Mayo 2026] vs [Julio 2026])\n"
+        "- **Consumos**: pasó de **$6.727.492 CLP [Mayo 2026]** a **$10.252.948 CLP [Julio 2026]** (+$3.525.456 CLP)."
+    )
+
+    mock_client = MagicMock()
+    mock_client.models.generate_content.side_effect = [
+        MagicMock(text=plan_json),
+        MagicMock(text=eval_json),
+        MagicMock(text=multi_sql_output_json),
+        MagicMock(text=synth_markdown),
+    ]
+
+    with patch("analytics.nodes.get_gemini_client", return_value=mock_client):
+        result = run_analysis(
+            "Haz una revisión mes a mes del 2026, compáralo YoY con 2025 y dime qué impulsó el alza de mayo a julio"
+        )
+
+    assert result.needs_clarification is False
+    assert result.data is not None
+    assert len(result.data) == 3
+
+    # Verify each named dataset returned real rows with period provenance columns
+    q_ids = [item["query_id"] for item in result.data]
+    assert q_ids == ["mom_2026", "yoy_2025_2026", "variance_may_jul_2026"]
+
+    mom_rows = result.data[0]["rows"]
+    assert len(mom_rows) >= 8
+    assert "period_date" in mom_rows[0]
+
+    yoy_rows = result.data[1]["rows"]
+    assert len(yoy_rows) >= 2
+    assert yoy_rows[0]["baseline_period"].startswith("2025-")
+    assert yoy_rows[0]["comparison_period"].startswith("2026-")
+
+    var_rows = result.data[2]["rows"]
+    assert var_rows[0]["category_name"] == "consumos"
+    assert var_rows[0]["baseline_period"] == "2026-05-01"
+    assert var_rows[0]["peak_period"] == "2026-07-01"
+
+    # Verify explicit [Mes Año] citations in synthesized report
+    assert "[Enero 2026]" in result.summary
+    assert "[Mayo 2026]" in result.summary
+    assert "[Julio 2026]" in result.summary
+    assert "[Julio 2025]" in result.summary
