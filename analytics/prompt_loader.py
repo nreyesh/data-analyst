@@ -44,6 +44,46 @@ def load_data_dictionary_str() -> str:
     return dict_path.read_text(encoding="utf-8")
 
 
+def load_modular_data_dictionary(domain: str = "building") -> str:
+    """Assemble modular Data Dictionary slices based on domain.
+
+    Args:
+        domain: One of 'building', 'unit', or 'cross_domain'.
+
+    Returns:
+        Assembled markdown string of the relevant domain slices.
+    """
+    settings = get_analytics_settings()
+    dd_dir = settings.data_dictionary_dir
+
+    if not dd_dir.exists():
+        return load_data_dictionary_str()
+
+    core_file = dd_dir / "00_core_conventions.md"
+    building_file = dd_dir / "01_building_domain.md"
+    unit_file = dd_dir / "02_unit_domain.md"
+    cross_file = dd_dir / "03_cross_domain_bridge.md"
+
+    files_to_load = [core_file]
+
+    normalized_domain = domain.lower().strip()
+    if normalized_domain == "unit":
+        files_to_load.append(unit_file)
+    elif normalized_domain in ("cross_domain", "cross-domain", "hybrid"):
+        files_to_load.extend([building_file, unit_file, cross_file])
+    else:  # default 'building'
+        files_to_load.append(building_file)
+
+    parts: list[str] = []
+    for f in files_to_load:
+        if f.exists():
+            parts.append(f.read_text(encoding="utf-8").strip())
+        else:
+            logger.warning("Modular data dictionary slice '%s' not found.", f)
+
+    return "\n\n---\n\n".join(parts)
+
+
 def load_prompt_template(name: str) -> str:
     """Load prompt template text from prompts directory.
 

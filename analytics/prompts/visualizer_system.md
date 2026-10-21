@@ -58,6 +58,38 @@ Do NOT call `plt.show()`.
 3. **`time_series_trend`**:
    * Render a chronological line plot with markers (`marker='o'`) and data labels on key peaks and troughs.
 
+4. **Recipe A: `unit_stacked_evolution` (Stacked Component Evolution for Apartments)**:
+   * When data contains unit billing components (`calculated_dept_subtotal` / `base_gasto_comun`, `calculated_consumo_total` / `consumos_total`, and `calculated_unit_subtotal` / `fondos_recargos`):
+   * Render a stacked bar chart using `bottom=...` stacking:
+   ```python
+   fig, ax = plt.subplots(figsize=(10, 5.5))
+   b1 = ax.bar(periods, base, label="Base Prorrateo", color="#3498db")
+   b2 = ax.bar(periods, consumos, bottom=base, label="Consumos (Agua/Gas)", color="#2ecc71")
+   bottom_for_fondos = [b + c for b, c in zip(base, consumos)]
+   b3 = ax.bar(periods, fondos, bottom=bottom_for_fondos, label="Gastos Unidad / Fondos", color="#e74c3c")
+   # Annotate total on top of each bar
+   for i, (tot, p) in enumerate(zip(totals, periods)):
+       ax.text(i, tot + 1500, f"${tot:,.0f}".replace(",", "."), ha="center", va="bottom", fontsize=9, fontweight="bold")
+   ax.set_ylabel("Monto Total (CLP)")
+   ax.legend(loc="upper left")
+   ```
+
+5. **Recipe B: `dual_axis_tariff` (Tariff vs. Volume Dual-Axis Disentangler)**:
+   * When data contains metered water consumption (`consumption` or `consumption_m3`) and rate (`unit_rate` or `unit_rate_clp`):
+   * Render a dual Y-axis plot using `ax.twinx()`:
+   ```python
+   fig, ax1 = plt.subplots(figsize=(10, 5))
+   ax2 = ax1.twinx()
+   # Axis 1: Volume bars
+   ax1.bar(periods, m3_vals, width=0.4, color="#bdc3c7", alpha=0.6, label="Consumo (m³)")
+   ax1.set_ylabel("Consumo (m³)", color="#7f8c8d")
+   # Axis 2: Tariff line
+   ax2.plot(periods, tariffs, color="#e67e22", marker="o", linewidth=2.5, markersize=8, label="Tarifa ($/m³)")
+   ax2.set_ylabel("Tarifa por m³ (CLP)", color="#d35400")
+   for p, t in zip(periods, tariffs):
+       ax2.annotate(f"${t:,.0f}".replace(",", "."), (p, t), textcoords="offset points", xytext=(0, 10), ha="center", fontsize=9, fontweight="bold", color="#d35400")
+   ```
+
 ---
 
 ## 3. Self-Healing Recovery

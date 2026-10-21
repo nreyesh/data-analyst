@@ -7,7 +7,7 @@ An autonomous, self-healing pipeline for extracting, validating, and persistentl
 This repository implements **Phase 1**, **Phase 2**, and **Phase 3** of the project roadmap:
 * **Phase 1 (Dual-Domain PDF Extractors, Cross-Validation & Input Watcher)**: Dedicated LangGraph state machines utilizing Google Gemini multimodal vision for both `general` building reports (3-tier integer validation: `operational_total`, `fondos_total`, `grand_total`) and `unit` apartment bills (5-point deterministic integer validation: concepts table sum, hot water & heating utility cross-checks, unit charges sum, and `total_to_pay_amount` balance check), self-healing error correction loops, and zero-cost folder-routed batch/watch processing (`data/input/general/` and `data/input/unit/`).
 * **Phase 2 (Storage Layer & Domain-Partitioned Spool Sync)**: Persistent FastAPI backend service and normalized 3NF SQLite database (`expenses.db`) storing building-wide reports (`expense_reports`, `expense_sections`, `expense_items`) alongside a 4-table unit billing schema (`unit_bills`, `unit_bill_concepts`, `unit_bill_consumptions`, `unit_bill_charges`) linked via `period_date` (`YYYY-MM-01`), with UUIDv7 primary keys, atomic duplicate overwrites (upserts), and resilient domain-partitioned cloud spooling (`data/output/{general,unit}/`).
-* **Phase 3 (Analytics & Plotting Engine)**: Autonomous LangGraph SQL-and-Matplotlib analytical agent featuring multi-analysis orchestration (1–3 SQL queries per request for MoM, YoY, and category variance), mandatory `[Mes Año]` period citations, a two-hop variance analysis loop, 3-layer schema privacy defense, strict HTTP-only Data Gateway isolation (whitelisting both building-wide and unit-level tables with zero direct DB access), and an offline circuit breaker.
+* **Phase 3 (Analytics & Plotting Engine with Unit Intelligence)**: Autonomous LangGraph SQL-and-Matplotlib analytical agent featuring multi-analysis orchestration (1–3 SQL queries per request for MoM, YoY, and category variance), mandatory `[Mes Año]` period citations, a two-hop variance analysis loop, 3-layer schema privacy defense, strict HTTP-only Data Gateway isolation (whitelisting both building-wide and unit-level tables with zero direct DB access), an offline circuit breaker, and **Unit-Level Expense Intelligence** (a <15ms fast-path REST tool `get_unit_bill_details`, a dynamic modular knowledge base cutting prompt token overhead by ~50%, two-part causal decomposition bridging unit bills with building-wide cost drivers, and recipe-driven Matplotlib charting for stacked component evolutions and dual-axis utility tariffs).
 
 ---
 
@@ -33,10 +33,14 @@ This repository implements **Phase 1**, **Phase 2**, and **Phase 3** of the proj
                                     └───────────────────────┘          ▼            └─────────────────────────┘
                                                             ┌───────────────────────┐
                                                             │        PHASE 3        │
-                                                            │  Data Analyst Agent   │
-                                                            │  • Strict HTTP Client │
+                                                            │  Data Analyst Engine  │
+                                                            │  • Fast-Path REST Tool│
+                                                            │    (<15ms snapshot)   │
+                                                            │  • Dynamic Knowledge  │
+                                                            │    (Modular slices)   │
                                                             │  • Two-Hop Variance   │
-                                                            │  • Sandbox Plotting   │
+                                                            │  • Cross-Domain Bridge│
+                                                            │  • Recipe A/B Sandbox │
                                                             └───────────────────────┘
 ```
 
@@ -186,14 +190,26 @@ If the backend service is temporarily offline, the extractor gracefully stages f
 > **Note:** The Data Analyst agent enforces strict service isolation and queries the database exclusively over HTTP via the Backend Data Gateway (`POST /api/v1/analytics/execute-query`). Ensure the FastAPI server (`Step 1`) is running. If the backend server is offline, the agent trips a circuit breaker and returns a user-friendly service-unavailable notice without accessing SQLite directly.
 
 ```bash
-# Run natural language trend & plotting queries via CLI
+# Run natural language trend & plotting queries via CLI (Building Domain)
 python -m analytics.cli "Muestra la evolución del gasto total mensual en 2025. Incluye un gráfico."
+
+# Run unit-level expense evolution and stacked component chart (Unit Domain - Recipe A)
+python -m analytics.cli "Evolución de gastos de la unidad B-504 en 2026. Con gráfico."
+
+# Run two-part causal investigation bridging unit bills with building-wide drivers (Cross-Domain)
+python -m analytics.cli "¿Por qué subió tanto mi gasto común de agosto en el depto B-504?"
+
+# Run admin multi-unit comparison natively in SQL
+python -m analytics.cli "Compara el gasto común entre el depto B-504 y el B-506 en 2026"
 
 # Run two-hop variance attribution (with interactive clarification if multi-phase)
 python -m analytics.cli "¿A qué se debe el aumento del gasto en el 2026?"
 
 # Run compound multi-analysis (MoM + YoY + Category Variance with [Mes Año] citations & multi-panel subplots)
 python -m analytics.cli "Haz una revisión mes a mes del 2026, compáralo YoY con 2025 y dime qué categorías explican el último aumento"
+
+# Fast-path unit snapshot lookup in Python (<15ms, zero token cost)
+python -c "from analytics.tools import get_unit_bill_details; print(get_unit_bill_details('B-504'))"
 
 # Or query via the high-level REST endpoint
 curl -s -X POST http://localhost:8000/api/v1/analytics/query \
@@ -236,10 +252,10 @@ sqlite3 -header -column data/storage/expenses.db "SELECT charge_type, descriptio
 
 ## 🧪 Running the Test Suite
 
-The test suite contains 98 offline automated tests (covering Phase 1 `general` and `unit` extraction/validation/input watcher, Phase 2 persistence/spooling across both domains, and Phase 3 analytics/multi-query/isolation) that execute in seconds without calling the live Gemini API:
+The test suite contains 110 offline automated tests (covering Phase 1 `general` and `unit` extraction/validation/input watcher, Phase 2 persistence/spooling across both domains, Phase 3 analytics/multi-query/isolation, and unit intelligence/fast-path tools) that execute in seconds without calling the live Gemini API:
 
 ```bash
-# Run all 98 tests
+# Run all 110 tests
 python -m pytest -v
 
 # Run Phase 1 & Phase 3 workflow/unit tests
@@ -281,14 +297,17 @@ python -m pytest --cov=data_extractor --cov=analytics --cov=backend/app -v
 data-analyst/
 ├── AGENTS.md                   # Architectural guidelines and engineering rules
 ├── README.md                   # Project documentation and quickstart
-├── analytics/                  # Phase 3: LangGraph Analytics & Plotting Engine
+├── analytics/                  # Phase 3: LangGraph Analytics & Plotting Engine with Unit Intelligence
 │   ├── cli.py                  # CLI entry point for natural language queries & charts
 │   ├── config.py               # Analytics settings & environment configuration
 │   ├── gateway_client.py       # Strict HTTP-only client for the Data Gateway Proxy
 │   ├── nodes.py                # Planner, Trajectory Inspector/Evaluator, SQL Coder, Visualizer, Synthesizer
-│   ├── prompts/                # System instructions & YAML Data Dictionary
-│   ├── sandbox.py              # Isolated headless subprocess runner for Matplotlib
-│   ├── state.py                # TypedDict & Pydantic state/output contracts
+│   ├── prompt_loader.py        # Dynamic modular prompt loader assembling domain slices
+│   ├── prompts/                # System instructions & modular data dictionary slices
+│   │   └── data_dictionary/   # Modular slices (core, building, unit, cross_domain)
+│   ├── sandbox.py              # Isolated headless subprocess runner for Matplotlib (Recipe A/B)
+│   ├── state.py                # TypedDict & Pydantic state/output contracts (unit & domain aware)
+│   ├── tools/                  # Fast-path tools (get_unit_bill_details <15ms snapshot)
 │   └── workflow.py             # LangGraph state machine, checkpointing & circuit breaker
 ├── backend/                    # Phase 2: Persistence & Data Gateway service
 │   ├── app/

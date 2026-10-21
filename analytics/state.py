@@ -58,6 +58,14 @@ class IntentPlan(BaseModel):
         default_factory=list,
         description="Tables required (e.g. ['expense_reports', 'expense_sections'])",
     )
+    target_unit: Optional[str] = Field(
+        default=None,
+        description="Identified apartment unit code (e.g. 'B-504', 'A-102') if query targets a specific unit. None for general building queries.",
+    )
+    knowledge_domain: Literal["building", "unit", "cross_domain"] = Field(
+        default="building",
+        description="Domain slice to assemble: 'building' for condominium totals/sections, 'unit' for personal apartment bills/water meters, 'cross_domain' for causal questions explaining unit cost surges.",
+    )
     time_scope: str = Field(
         default="",
         description="Time horizon (e.g. 'all periods', '2026', '2025-06-01 to 2026-06-01')",
@@ -140,6 +148,7 @@ class DataAnalystState(TypedDict, total=False):
 
     # 2. OPERATIONAL TIER (Overwritten per pass)
     user_query: str
+    target_unit: Optional[str]
     intent_plan: Optional[IntentPlan]
     macro_trajectory: Optional[list[dict[str, Any]]]
     trajectory_evaluation: Optional[TrajectoryEvaluation]

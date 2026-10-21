@@ -93,6 +93,11 @@ class AnalyticsSettings(BaseSettings):
         """High-level consumer analytics endpoint URL."""
         return f"{self.backend_base_url.rstrip('/')}/api/v1/analytics/query"
 
+    @property
+    def unit_bills_api_url(self) -> str:
+        """Endpoint URL for unit bills REST resource."""
+        return f"{self.backend_base_url.rstrip('/')}/api/v1/unit-bills"
+
     # 5. Path Boundaries
     project_root: Path = Field(
         default_factory=lambda: Path(__file__).resolve().parent.parent
@@ -126,6 +131,11 @@ class AnalyticsSettings(BaseSettings):
     def data_dictionary_path(self) -> Path:
         """Path to YAML Data Dictionary asset."""
         return self.prompts_dir / "data_dictionary.md"
+
+    @property
+    def data_dictionary_dir(self) -> Path:
+        """Directory storing modular markdown data dictionary slices."""
+        return self.prompts_dir / "data_dictionary"
 
     def ensure_directories(self) -> None:
         """Ensure standard charts, scratch, and storage directories exist."""

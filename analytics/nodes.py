@@ -17,7 +17,11 @@ from analytics.gateway_client import (
     is_gateway_unavailable_error,
     query_data_gateway,
 )
-from analytics.prompt_loader import load_data_dictionary_str, load_prompt_template
+from analytics.prompt_loader import (
+    load_data_dictionary_str,
+    load_modular_data_dictionary,
+    load_prompt_template,
+)
 from analytics.sandbox import run_plotting_sandbox
 from analytics.state import (
     DataAnalystState,
@@ -149,6 +153,7 @@ def planner_node(state: DataAnalystState, client: genai.Client | None = None) ->
 
     return {
         "intent_plan": plan,
+        "target_unit": plan.target_unit if plan else None,
         "retry_count": 0,
     }
 
@@ -159,12 +164,27 @@ def planner_node(state: DataAnalystState, client: genai.Client | None = None) ->
 
 
 def trajectory_inspector_node(state: DataAnalystState) -> dict[str, Any]:
-    """Execute Hop 1 macro query on expense_reports to verify monthly operational, fondos, and grand totals across all years."""
-    sql = (
-        "SELECT period_date, period_year, period_month, "
-        "operational_total, fondos_total, calculated_grand_total "
-        "FROM expense_reports ORDER BY period_date ASC"
-    )
+    """Execute Hop 1 macro query on expense_reports (or unit_bills) to verify monthly totals across all years."""
+    target_unit = state.get("target_unit")
+    if not target_unit:
+        plan = state.get("intent_plan")
+        if plan and plan.target_unit:
+            target_unit = plan.target_unit
+
+    if target_unit:
+        safe_unit = target_unit.strip().upper().replace("'", "")
+        sql = (
+            "SELECT period_date, period_year, period_month, "
+            "calculated_dept_subtotal, calculated_consumo_total, "
+            "calculated_unit_subtotal, calculated_total_month AS calculated_grand_total "
+            f"FROM unit_bills WHERE unit_code = '{safe_unit}' ORDER BY period_date ASC"
+        )
+    else:
+        sql = (
+            "SELECT period_date, period_year, period_month, "
+            "operational_total, fondos_total, calculated_grand_total "
+            "FROM expense_reports ORDER BY period_date ASC"
+        )
 
     rows, error_msg = query_data_gateway(sql=sql)
     if error_msg is not None:
@@ -306,7 +326,10 @@ def sql_coder_node(state: DataAnalystState, client: genai.Client | None = None) 
     """Generate or correct 1 to 3 read-only SQLite SELECT queries using IntentPlan, TrajectoryEvaluation, and Data Dictionary."""
     gemini_client = client or get_gemini_client()
     system_instruction = load_prompt_template("sql_coder_system.md")
-    data_dict_yaml = load_data_dictionary_str()
+
+    plan = state.get("intent_plan")
+    domain = plan.knowledge_domain if plan and plan.knowledge_domain else "building"
+    data_dict_yaml = load_modular_data_dictionary(domain=domain)
 
     config = types.GenerateContentConfig(
         response_mime_type="application/json",
@@ -314,8 +337,6 @@ def sql_coder_node(state: DataAnalystState, client: genai.Client | None = None) 
         system_instruction=system_instruction,
         temperature=0.0,
     )
-
-    plan = state.get("intent_plan")
     eval_res = state.get("trajectory_evaluation")
     user_choice = state.get("user_clarification_choice")
 
