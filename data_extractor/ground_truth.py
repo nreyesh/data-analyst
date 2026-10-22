@@ -221,6 +221,8 @@ class UnitGroundTruthData:
 
     period_date: str | None = None
     unit_code: str | None = None
+    unit_tower: str | None = None
+    unit_number: int | None = None
     alicuota_total: float | None = None
     last_payment_date: str | None = None
     last_payment_amount: int | None = None
@@ -277,6 +279,14 @@ def extract_unit_ground_truth(
             unit_raw = m_header.group(3).strip()
             if unit_raw:
                 result.unit_code = unit_raw
+                m_dim = re.match(r"^([A-Za-z]+)\s*[-]?\s*(\d+)$", unit_raw) or re.match(r"^(\d+)\s*[-]?\s*([A-Za-z]+)$", unit_raw)
+                if m_dim:
+                    if m_dim.group(1).isalpha():
+                        result.unit_tower = m_dim.group(1).upper()
+                        result.unit_number = int(m_dim.group(2))
+                    else:
+                        result.unit_number = int(m_dim.group(1))
+                        result.unit_tower = m_dim.group(2).upper()
 
     # 2. Alícuota Total ("Alícuota Total \n 0,16736 %")
     m_alicuota = re.search(

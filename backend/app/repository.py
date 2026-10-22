@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -198,17 +199,38 @@ def find_unit_bill_by_id(db: Session, bill_id: str) -> UnitBillModel | None:
 def list_unit_bills(
     db: Session,
     unit_code: str | None = None,
+    tower: str | None = None,
+    unit_number: int | None = None,
     skip: int = 0,
     limit: int = 100,
 ) -> list[UnitBillModel]:
-    """List unit bills ordered by period_date descending, optionally filtered by unit_code."""
+    """List unit bills ordered by period_date descending, optionally filtered by unit_code, tower, and/or unit_number."""
     stmt = select(UnitBillModel)
+    if tower is not None and tower.strip():
+        stmt = stmt.where(UnitBillModel.tower == tower.strip().upper())
+    if unit_number is not None:
+        stmt = stmt.where(UnitBillModel.unit_number == unit_number)
     if unit_code is not None and unit_code.strip():
-        stmt = stmt.where(UnitBillModel.unit_code == unit_code.strip().upper())
+        norm_code = unit_code.strip().upper()
+        m_suffix = re.match(r"^(\d+)\s*[-]?\s*([A-Za-z]+)$", norm_code)
+        if m_suffix:
+            norm_code = f"{m_suffix.group(2)}-{m_suffix.group(1)}"
+        stmt = stmt.where(UnitBillModel.unit_code == norm_code)
     stmt = (
         stmt.order_by(UnitBillModel.period_date.desc(), UnitBillModel.unit_code.asc())
         .offset(skip)
         .limit(limit)
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
+def list_towers_for_unit_number(db: Session, unit_number: int) -> list[str]:
+    """Return distinct tower identifiers that contain the given unit number."""
+    stmt = (
+        select(UnitBillModel.tower)
+        .where(UnitBillModel.unit_number == unit_number)
+        .distinct()
+        .order_by(UnitBillModel.tower.asc())
     )
     return list(db.execute(stmt).scalars().all())
 
@@ -292,8 +314,25 @@ def save_unit_bill(
     total_month = dept_subtotal + consumo_subtotal + unit_subtotal
     metadata_json = json.dumps(request.metadata) if request.metadata else None
 
+    norm_tower = request.unit_tower.strip().upper() if request.unit_tower else None
+    norm_number = request.unit_number
+    if not norm_tower or norm_number is None:
+        m1 = re.match(r"^([A-Za-z]+)\s*[-]?\s*(\d+)$", norm_unit)
+        m2 = re.match(r"^(\d+)\s*[-]?\s*([A-Za-z]+)$", norm_unit)
+        if m1:
+            norm_tower = norm_tower or m1.group(1).upper()
+            norm_number = norm_number if norm_number is not None else int(m1.group(2))
+        elif m2:
+            norm_tower = norm_tower or m2.group(2).upper()
+            norm_number = norm_number if norm_number is not None else int(m2.group(1))
+        else:
+            norm_tower = norm_tower or "B"
+            norm_number = norm_number if norm_number is not None else 0
+
     unit_bill = UnitBillModel(
         unit_code=norm_unit,
+        tower=norm_tower,
+        unit_number=norm_number,
         period_date=period_date,
         period_year=year,
         period_month=month,

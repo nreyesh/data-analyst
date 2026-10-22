@@ -239,23 +239,23 @@ sqlite3 -header -column data/storage/expenses.db "SELECT id, period_date, operat
 # View category breakdown with expense_type ('operational' vs 'fondos') and deterministic subtotals
 sqlite3 -header -column data/storage/expenses.db "SELECT category_name, expense_type, calculated_subtotal FROM expense_sections;"
 
-# View individual apartment bills (unit_code, period_date, alicuota_total, and total_to_pay)
-sqlite3 -header -column data/storage/expenses.db "SELECT id, unit_code, period_date, alicuota_total, total_to_pay, calculated_concepts_total, calculated_charges_total FROM unit_bills;"
+# View individual apartment bills (unit_code, tower, unit_number, period_date, alicuota_total, and calculated_total_month)
+sqlite3 -header -column data/storage/expenses.db "SELECT id, unit_code, tower, unit_number, period_date, alicuota_total, calculated_total_month AS total_to_pay, calculated_dept_subtotal, calculated_consumo_total, calculated_unit_subtotal FROM unit_bills;"
 
 # View billed concepts, metered utilities, and unit-specific charges/fines
 sqlite3 -header -column data/storage/expenses.db "SELECT concept_name, normalized_name, detail, amount FROM unit_bill_concepts;"
-sqlite3 -header -column data/storage/expenses.db "SELECT service_name, consumption_measured, consumption_billed, unit_of_measure, total_amount FROM unit_bill_consumptions;"
-sqlite3 -header -column data/storage/expenses.db "SELECT charge_type, description, amount FROM unit_bill_charges;"
+sqlite3 -header -column data/storage/expenses.db "SELECT item_name, normalized_name, previous_reading, current_reading, consumption, unit_rate, total_amount FROM unit_bill_consumptions;"
+sqlite3 -header -column data/storage/expenses.db "SELECT charge_name, normalized_name, charge_type, amount FROM unit_bill_charges;"
 ```
 
 ---
 
 ## 🧪 Running the Test Suite
 
-The test suite contains 110 offline automated tests (covering Phase 1 `general` and `unit` extraction/validation/input watcher, Phase 2 persistence/spooling across both domains, Phase 3 analytics/multi-query/isolation, and unit intelligence/fast-path tools) that execute in seconds without calling the live Gemini API:
+The test suite contains 114 offline automated tests (covering Phase 1 `general` and `unit` extraction/validation/input watcher, Phase 2 persistence/spooling across both domains, Phase 3 analytics/multi-query/isolation, and unit intelligence/fast-path tools) that execute in seconds without calling the live Gemini API:
 
 ```bash
-# Run all 110 tests
+# Run all 114 tests
 python -m pytest -v
 
 # Run Phase 1 & Phase 3 workflow/unit tests
@@ -281,7 +281,7 @@ python -m pytest --cov=data_extractor --cov=analytics --cov=backend/app -v
 | `GET` | `/api/v1/reports/period/{date}` | Get building report hierarchy by period date (`YYYY-MM-01`) |
 | `DELETE` | `/api/v1/reports/{id}` | Delete building report (cascades to all sections and items) |
 | `POST` | `/api/v1/unit-bills` | Ingest new apartment bill or overwrite existing `(unit_code, period_date)` atomically |
-| `GET` | `/api/v1/unit-bills` | List apartment bills (optional `?unit_code=` and `?period_date=` filters) |
+| `GET` | `/api/v1/unit-bills` | List apartment bills (optional `?unit_code=`, `?tower=`, `?unit_number=`, and `?period_date=` filters) |
 | `GET` | `/api/v1/unit-bills/{bill_id}` | Get full apartment bill hierarchy (concepts, consumptions, charges) by UUIDv7 ID |
 | `DELETE` | `/api/v1/unit-bills/{bill_id}` | Delete apartment bill (cascades to concepts, consumptions, and charges) |
 | `GET` | `/api/v1/sync/status` | Telemetry on pending, synced, and failed queues across `general` and `unit` domains |

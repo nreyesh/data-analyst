@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Literal, TypedDict
+from typing import Any, Literal, TypedDict
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
@@ -227,8 +227,16 @@ class UnitBillReport(BaseModel):
         description="Billing period date normalized strictly to 01/MM/YYYY (e.g. 01/08/2026 for Agosto 2026)."
     )
     unit_code: str = Field(
-        min_length=1,
+        default="",
         description="Apartment unit identifier from the header (e.g. 'B-504').",
+    )
+    unit_tower: str = Field(
+        default="B",
+        description="Building tower identifier (e.g. 'B', 'A').",
+    )
+    unit_number: int = Field(
+        default=0,
+        description="Apartment number as an integer (e.g. 504, 506).",
     )
     alicuota_total: float = Field(
         description="Total prorate percentage ('Alícuota Total') as a float (e.g. 0.16736 for '0,16736 %')."
@@ -253,6 +261,34 @@ class UnitBillReport(BaseModel):
         default_factory=list,
         description="Non-zero rows from the 'Gastos por Unidad' table (excluding 'Subtotal Recargos' and 'Total del mes').",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_unit_dimensions(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            code = str(data.get("unit_code") or "").strip().upper()
+            tower = data.get("unit_tower")
+            number = data.get("unit_number")
+            if (not tower or not number) and code:
+                m1 = re.match(r"^([A-Za-z]+)\s*[-]?\s*(\d+)$", code)
+                m2 = re.match(r"^(\d+)\s*[-]?\s*([A-Za-z]+)$", code)
+                if m1:
+                    tower = tower or m1.group(1).upper()
+                    number = number if number is not None else int(m1.group(2))
+                elif m2:
+                    tower = tower or m2.group(2).upper()
+                    number = number if number is not None else int(m2.group(1))
+            if tower and number and not code:
+                code = f"{str(tower).upper().strip()}-{int(number)}"
+            elif tower and number and code and "-" not in code:
+                code = f"{str(tower).upper().strip()}-{int(number)}"
+            if tower:
+                data["unit_tower"] = str(tower).upper().strip()
+            if number is not None:
+                data["unit_number"] = int(number)
+            if code:
+                data["unit_code"] = code
+        return data
 
     @field_validator("issue_date")
     @classmethod

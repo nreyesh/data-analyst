@@ -215,6 +215,20 @@ def validate_unit_bill(
                 f"but document declared unit is '{ground_truth.unit_code.strip()}'."
             )
 
+    if ground_truth.unit_tower is not None and report.unit_tower:
+        if report.unit_tower.strip().upper() != ground_truth.unit_tower.strip().upper():
+            errors.append(
+                f"Unit tower mismatch: extracted unit_tower is '{report.unit_tower.strip()}', "
+                f"but document declared tower is '{ground_truth.unit_tower.strip()}'."
+            )
+
+    if ground_truth.unit_number is not None and report.unit_number:
+        if report.unit_number != ground_truth.unit_number:
+            errors.append(
+                f"Unit number mismatch: extracted unit_number is {report.unit_number}, "
+                f"but document declared unit number is {ground_truth.unit_number}."
+            )
+
     if ground_truth.alicuota_total is not None:
         if abs(report.alicuota_total - ground_truth.alicuota_total) > 1e-6:
             errors.append(

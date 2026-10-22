@@ -6,7 +6,7 @@ Unit bills and building expense reports are aligned chronologically by `period_d
 SELECT u.unit_code, u.period_date, u.calculated_total_month, r.operational_total, r.calculated_grand_total
 FROM unit_bills u
 JOIN expense_reports r ON u.period_date = r.period_date
-WHERE u.unit_code = 'B-504';
+WHERE u.tower = 'B' AND u.unit_number = 504;
 ```
 
 ## 2. Prorating Relationships (Ley de Copropiedad 21.442)

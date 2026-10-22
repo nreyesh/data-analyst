@@ -15,7 +15,9 @@ Header table containing monthly unit statement summaries.
 | Column | Type | Constraints | Description |
 | :--- | :--- | :--- | :--- |
 | `id` | VARCHAR(36) | PRIMARY KEY | Time-ordered UUIDv7 unique identifier. |
-| `unit_code` | VARCHAR(32) | INDEXED, NOT NULL | Normalized apartment code e.g. `'B-504'`, `'B-506'`. |
+| `unit_code` | VARCHAR(32) | INDEXED, NOT NULL | Canonical composite code e.g. `'B-504'`, `'B-506'`. |
+| `tower` | VARCHAR(16) | INDEXED, NOT NULL | Building tower identifier e.g. `'B'`, `'A'`. |
+| `unit_number` | INTEGER | INDEXED, NOT NULL | Apartment number integer e.g. `504`, `506`. |
 | `period_date` | VARCHAR(10) | INDEXED, NOT NULL | Period date formatted strictly as `'YYYY-MM-01'`. |
 | `period_year` | INTEGER | NOT NULL | Four-digit calendar year (e.g. `2026`). |
 | `period_month` | INTEGER | NOT NULL | Calendar month number (1 to 12). |
@@ -75,7 +77,7 @@ Breakdown rows in "Tabla Gastos por Unidad" (Fines, fixed charges, recargos).
 ```sql
 SELECT period_date, calculated_dept_subtotal, calculated_consumo_total, calculated_unit_subtotal, calculated_total_month
 FROM unit_bills
-WHERE unit_code = 'B-504'
+WHERE tower = 'B' AND unit_number = 504
 ORDER BY period_date ASC;
 ```
 
@@ -84,14 +86,14 @@ ORDER BY period_date ASC;
 SELECT u.period_date, c.consumption AS consumption_m3, c.unit_rate AS unit_rate_clp, c.total_amount AS total_clp
 FROM unit_bill_consumptions c
 JOIN unit_bills u ON c.unit_bill_id = u.id
-WHERE u.unit_code = 'B-504'
+WHERE u.tower = 'B' AND u.unit_number = 504
 ORDER BY u.period_date ASC;
 ```
 
 ### Multi-Unit Comparison (Admin)
 ```sql
-SELECT unit_code, period_date, calculated_total_month
+SELECT unit_code, tower, unit_number, period_date, calculated_total_month
 FROM unit_bills
-WHERE unit_code IN ('B-504', 'B-506')
+WHERE (tower = 'B' AND unit_number IN (504, 506))
 ORDER BY period_date ASC, unit_code ASC;
 ```

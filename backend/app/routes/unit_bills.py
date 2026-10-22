@@ -76,13 +76,22 @@ def ingest_unit_bill(
     description="Returns stored unit bill summaries ordered by period_date descending, with optional unit_code filter.",
 )
 def get_unit_bills(
-    unit_code: str | None = Query(default=None, description="Optional unit code filter (e.g. 'B-504')"),
+    unit_code: str | None = Query(default=None, description="Optional unit code filter (e.g. 'B-504' or '504B')"),
+    tower: str | None = Query(default=None, description="Optional tower filter (e.g. 'B')"),
+    unit_number: int | None = Query(default=None, description="Optional unit number filter (e.g. 504)"),
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
     db: Session = Depends(get_db),
 ) -> list[UnitBillSummaryResponse]:
     """List unit bill summaries."""
-    bills = list_unit_bills(db, unit_code=unit_code, skip=skip, limit=limit)
+    bills = list_unit_bills(
+        db,
+        unit_code=unit_code,
+        tower=tower,
+        unit_number=unit_number,
+        skip=skip,
+        limit=limit,
+    )
     return [UnitBillSummaryResponse.model_validate(b) for b in bills]
 
 

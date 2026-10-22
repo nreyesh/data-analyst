@@ -24,8 +24,13 @@ When `is_authorized_query = false`, leave `analysis_goal`, `relevant_tables`, an
 
 Identify if the user is asking about an individual apartment unit or building-wide expenses:
 
-* **Unit Code Extraction (`target_unit`)**:
-  Detect apartment codes (e.g. `B-504`, `504B`, `504-B`, `Depto 504`, `A-102`). Normalize to standard uppercase format (e.g. `'B-504'`). If no apartment is referenced, set `target_unit = null`.
+* **Unit Dimension Extraction (`unit_tower`, `unit_number`, `target_unit`)**:
+  - `unit_tower`: Building tower identifier (e.g. `'B'`, `'A'`).
+  - `unit_number`: Apartment number integer (e.g. `504`, `506`).
+  - `target_unit`: Canonical composite identifier (e.g. `'B-504'`).
+  - Parse natural language variations: `"506B"`, `"506-b"`, `"B-506"`, `"depto 506 torre b"`. All map to `unit_tower: "B"`, `unit_number: 506`, `target_unit: "B-506"`.
+  - **Granularity Guard**: If the user asks about a tower alone without an apartment number (e.g. *"gastos de la torre B"*), expenses are not segregated by tower. Set `needs_clarification = True` and request the specific apartment number.
+  - If no apartment is referenced, set `unit_tower = null`, `unit_number = null`, `target_unit = null`.
 
 * **Domain Classification (`knowledge_domain`)**:
   1. **`building`**: Questions about general community expenses, operational totals, building sections/items (e.g. *"Evolución de mantenciones en 2026"*).

@@ -335,3 +335,43 @@ def test_unit_validator_detects_meter_reading_delta_mismatch():
     assert result.is_valid is False
     assert any("Meter reading delta mismatch for 'Torre B'" in err for err in result.errors)
 
+
+def test_unit_report_decoupled_dimensions_parsing_and_defaults():
+    """Verify UnitBillReport parses and canonicalizes decoupled unit_tower and unit_number."""
+    with open(UNIT_FIXTURE_PATH, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    # 1. From standard "B-504"
+    data["unit_code"] = "B-504"
+    report = UnitBillReport.model_validate(data)
+    assert report.unit_tower == "B"
+    assert report.unit_number == 504
+    assert report.unit_code == "B-504"
+
+    # 2. From suffix "506B"
+    data["unit_code"] = "506B"
+    data.pop("unit_tower", None)
+    data.pop("unit_number", None)
+    report2 = UnitBillReport.model_validate(data)
+    assert report2.unit_tower == "B"
+    assert report2.unit_number == 506
+    assert report2.unit_code == "B-506"
+
+
+def test_unit_validator_cross_validates_tower_and_number():
+    """Verify validator catches discrepancies in unit tower and unit number."""
+    with open(UNIT_FIXTURE_PATH, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    report = UnitBillReport.model_validate(data)
+    gt = extract_unit_ground_truth(UNIT_PDF_PATH)
+    assert gt.unit_tower == "B"
+    assert gt.unit_number == 504
+
+    # Mismatch tower
+    report.unit_tower = "A"
+    res = validate_unit_bill(report, gt)
+    assert res.is_valid is False
+    assert any("Unit tower mismatch" in err for err in res.errors)
+
+

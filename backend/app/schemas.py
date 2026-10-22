@@ -205,6 +205,14 @@ class UnitBillIngestRequest(BaseModel):
         min_length=1,
         description="Unit identifier (e.g. 'B-504')",
     )
+    unit_tower: str | None = Field(
+        default=None,
+        description="Optional explicit tower identifier (e.g. 'B')",
+    )
+    unit_number: int | None = Field(
+        default=None,
+        description="Optional explicit unit number (e.g. 504)",
+    )
     alicuota_total: float = Field(
         ...,
         gt=0.0,
@@ -335,6 +343,8 @@ class UnitBillSummaryResponse(BaseModel):
 
     id: str
     unit_code: str
+    tower: str = "B"
+    unit_number: int = 0
     period_date: str
     period_year: int
     period_month: int

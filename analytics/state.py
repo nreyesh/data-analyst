@@ -62,6 +62,14 @@ class IntentPlan(BaseModel):
         default=None,
         description="Identified apartment unit code (e.g. 'B-504', 'A-102') if query targets a specific unit. None for general building queries.",
     )
+    unit_tower: Optional[str] = Field(
+        default=None,
+        description="Identified building tower (e.g. 'B', 'A') if query targets an individual unit.",
+    )
+    unit_number: Optional[int] = Field(
+        default=None,
+        description="Identified apartment number as integer (e.g. 504, 506) if query targets an individual unit.",
+    )
     knowledge_domain: Literal["building", "unit", "cross_domain"] = Field(
         default="building",
         description="Domain slice to assemble: 'building' for condominium totals/sections, 'unit' for personal apartment bills/water meters, 'cross_domain' for causal questions explaining unit cost surges.",
@@ -149,6 +157,8 @@ class DataAnalystState(TypedDict, total=False):
     # 2. OPERATIONAL TIER (Overwritten per pass)
     user_query: str
     target_unit: Optional[str]
+    unit_tower: Optional[str]
+    unit_number: Optional[int]
     intent_plan: Optional[IntentPlan]
     macro_trajectory: Optional[list[dict[str, Any]]]
     trajectory_evaluation: Optional[TrajectoryEvaluation]

@@ -5,6 +5,8 @@ Extraction Rules:
 1. Header & Metadata Fields:
    - `issue_date`: Locate the billing period month and year in the title banner (e.g., "Nota de Cobro Agosto 2026") and output it strictly in `01/MM/YYYY` format (e.g., "01/08/2026"). Do NOT use "Fecha Emisión" or "Pagar Hasta".
    - `unit_code`: Extract the unit identifier from the title banner next to the period (e.g., "B-504").
+   - `unit_tower`: Extract the building tower identifier from the unit (e.g., "B", "A").
+   - `unit_number`: Extract the apartment number as an integer (e.g., 504).
    - `alicuota_total`: Extract the numeric value from "Alícuota Total" as a floating-point number (convert comma decimal to dot, e.g., "0,16736 %" -> 0.16736).
    - `last_payment_date`: Extract "Fecha ultimo Pago" normalized strictly to `DD/MM/YYYY` (e.g., "31-08-2026" -> "31/08/2026"). If blank or absent, output null.
    - `last_payment_amount`: Extract "Monto ultimo Pago" strictly as an integer in Chilean Pesos (CLP) without symbols or dots (e.g., "$ 125.204" -> 125204). If blank or absent, output null.

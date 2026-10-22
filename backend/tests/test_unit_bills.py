@@ -15,7 +15,11 @@ from backend.app.models import (
     UnitBillConsumptionModel,
     UnitBillModel,
 )
-from backend.app.repository import find_report_by_period, find_unit_bill_by_unit_and_period
+from backend.app.repository import (
+    find_report_by_period,
+    find_unit_bill_by_unit_and_period,
+    list_towers_for_unit_number,
+)
 from backend.app.routes.analytics import validate_query_security
 
 
@@ -169,3 +173,40 @@ def test_data_gateway_allows_unit_bill_tables():
     """
     # Should not raise HTTPException
     validate_query_security(sql)
+
+
+def test_decoupled_unit_filtering_and_tower_lookup(
+    client: TestClient,
+    db_session: Session,
+    sample_unit_payload_504b_2026_08: dict,
+):
+    """Verify filtering by tower and unit_number, suffix unit_code format, and dynamic tower lookup."""
+    # 1. Ingest B-504
+    r1 = client.post("/api/v1/unit-bills", json=sample_unit_payload_504b_2026_08)
+    assert r1.status_code == 201
+
+    # 2. Ingest A-504
+    payload_a504 = copy.deepcopy(sample_unit_payload_504b_2026_08)
+    payload_a504["unit_code"] = "A-504"
+    r2 = client.post("/api/v1/unit-bills", json=payload_a504)
+    assert r2.status_code == 201
+
+    # Filter by tower and unit_number
+    res_b = client.get("/api/v1/unit-bills?tower=B&unit_number=504")
+    assert res_b.status_code == 200
+    bills_b = res_b.json()
+    assert len(bills_b) == 1
+    assert bills_b[0]["tower"] == "B"
+    assert bills_b[0]["unit_number"] == 504
+
+    # Filter by suffix unit_code "504B"
+    res_suffix = client.get("/api/v1/unit-bills?unit_code=504B")
+    assert res_suffix.status_code == 200
+    bills_suffix = res_suffix.json()
+    assert len(bills_suffix) == 1
+    assert bills_suffix[0]["unit_code"] == "B-504"
+
+    # Tower lookup for 504
+    towers = list_towers_for_unit_number(db_session, 504)
+    assert sorted(towers) == ["A", "B"]
+

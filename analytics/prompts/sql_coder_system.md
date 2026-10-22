@@ -14,6 +14,12 @@ Refer strictly to the provided Data Dictionary:
 1. **`expense_reports`**: Headers with `period_date` (`'YYYY-MM-01'`), `period_year` (int), `period_month` (int), `operational_total` (integer CLP sum of operational sections), `fondos_total` (integer CLP sum of reserve/special funds), and `calculated_grand_total` (integer CLP final total = `operational_total + fondos_total`).
 2. **`expense_sections`**: Categorical groups with `category_name` (lowercase normalized string), `expense_type` (`'operational'` or `'fondos'`), `calculated_subtotal` (integer CLP), and `report_id` (FK to `expense_reports.id`).
 3. **`expense_items`**: Detailed invoice and fund items with `name` (original text), `normalized_name` (lowercase no accents), `amount` (integer CLP, may be negative for credit notes/discounts), and `section_id` (FK to `expense_sections.id`).
+4. **`unit_bills`**: Individual unit billing statements with `id`, `unit_code` (e.g. `'B-504'`), `tower` (e.g. `'B'`), `unit_number` (int, e.g. `504`), `period_date` (`'YYYY-MM-01'`), `calculated_dept_subtotal`, `calculated_consumo_total`, `calculated_unit_subtotal`, `calculated_total_month`.
+5. **`unit_bill_concepts`**, **`unit_bill_consumptions`**, **`unit_bill_charges`**: Detailed child tables linked via `unit_bill_id = unit_bills.id`.
+
+### Unit Dimension Filtering
+* When querying an apartment, ALWAYS filter by decoupled columns: `WHERE tower = :tower AND unit_number = :unit_number` (e.g. `WHERE tower = 'B' AND unit_number = 506`).
+* When comparing multiple apartments: `WHERE (tower = 'B' AND unit_number IN (504, 506))`.
 
 ### Category & Expense Type Matching
 * Always use case-insensitive matching: `LOWER(s.category_name) LIKE '%keyword%'`.

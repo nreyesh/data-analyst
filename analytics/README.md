@@ -20,6 +20,11 @@ Autonomous LangGraph analytical question-answering and charting engine for Chile
 7. **Mandatory `[Mes Año]` Period Citations**: Enforces explicit period provenance columns (`period_date`, `baseline_period`, `peak_period`, or `start_period`/`end_period`/`months_count`) so every monetary figure and delta in the executive report cites its exact source month and year (e.g., `$49.387.905 CLP [Mayo 2026]` vs `$56.907.702 CLP [Julio 2026]`).
 8. **Subprocess Code Sandbox**: Executes generated plotting scripts in an isolated, headless (`MPLBACKEND=Agg`) subprocess with a 10s execution timeout.
 9. **Deterministic Arithmetic**: Never allows an LLM to sum or calculate metrics; all numbers are computed by SQLite.
+10. **Flexible Unit Disambiguation & Granularity Guard**:
+    - Parses natural Chilean apartment syntax variations (`"506b"`, `"B-506"`, `"depto 506 torre b"`) into decoupled relational dimensions (`tower="B"`, `unit_number=506`).
+    - Filters `unit_bills` cleanly via relational columns `WHERE tower = :tower AND unit_number = :unit_number`.
+    - **Dynamic DB-Backed Clarification**: When an apartment number is supplied without a tower (e.g. `"depto 506"`), queries SQLite for existing towers for that unit and pauses execution via `interrupt()` presenting dynamic candidate choices.
+    - **Granularity Guard**: Rejects tower-only queries (e.g. `"gastos de la torre B"`), clarifying that financial expenses are only tracked at the full building or individual apartment level.
 
 ---
 
@@ -51,6 +56,10 @@ python -m analytics.cli "Resumen de gastos enero 2026" --json
 # Specific and drilling question about the reason why expenses are going up (Two-Hop Variance Loop)
 python -m analytics.cli "Como ha sido la evolucion del gasto comun durante el 2026?.A que se debe el aumento del gasto?"
 python -m analytics.cli "A que se debe el aumento del gasto en el 2026?"
+
+# Individual unit queries with flexible syntax (e.g. 506b or depto 506)
+python -m analytics.cli "Muestrame la evolucion del gasto comun para el depto 506b"
+python -m analytics.cli "Muestrame la evolucion del gasto comun para el depto 506"  # Triggers interactive clarification if tower is omitted
 ```
 
 Charts are automatically saved to `data/output/charts/chart_<id>.png`.

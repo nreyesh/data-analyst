@@ -140,6 +140,12 @@ class UnitBillModel(Base):
     unit_code: Mapped[str] = mapped_column(
         String(32), nullable=False, index=True, comment="Unit code e.g. 'B-504'"
     )
+    tower: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="B", comment="Tower identifier e.g. 'B'"
+    )
+    unit_number: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, comment="Unit number e.g. 504"
+    )
     period_date: Mapped[str] = mapped_column(
         String(10), nullable=False, index=True, comment="YYYY-MM-01"
     )
@@ -201,6 +207,7 @@ class UnitBillModel(Base):
     __table_args__ = (
         UniqueConstraint("unit_code", "period_date", name="uq_unit_bill_period"),
         Index("idx_unit_bills_unit_period", "unit_code", "period_year", "period_month"),
+        Index("idx_unit_bills_tower_unit", "tower", "unit_number"),
     )
 
 

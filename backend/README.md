@@ -59,6 +59,30 @@ The SQLite database is located at `data/storage/expenses.db` with Write-Ahead Lo
 └────────────────────────────────────────────────────────┘
 ```
 
+### Unit Billing Statement Schema (`unit_bills`)
+
+```
+┌────────────────────────────────────────────────────────┐
+│                      unit_bills                        │
+├────────────────────────────────────────────────────────┤
+│ PK  id                      TEXT (UUIDv7)              │
+│ UQ  (unit_code, period_date)                           │
+│     unit_code               TEXT NOT NULL (e.g. 'B-504')│
+│ IDX tower                   TEXT NOT NULL (e.g. 'B')    │ ◀── Decoupled tower
+│ IDX unit_number             INTEGER NOT NULL (e.g. 504) │ ◀── Decoupled unit
+│ IDX period_date             TEXT NOT NULL (YYYY-MM-01) │
+│     alicuota_total          FLOAT NOT NULL             │
+│     calculated_dept_subtotal INTEGER NOT NULL (CLP)     │
+│     calculated_consumo_total INTEGER NOT NULL (CLP)     │
+│     calculated_unit_subtotal INTEGER NOT NULL (CLP)     │
+│     calculated_total_month  INTEGER NOT NULL (CLP)     │
+└───────────────────────────┬────────────────────────────┘
+                            │ 1 : N (ON DELETE CASCADE)
+             ┌──────────────┼──────────────┐
+             ▼              ▼              ▼
+   unit_bill_concepts  unit_bill_consumptions  unit_bill_charges
+```
+
 ---
 
 ## 🚀 How to Run the Service
@@ -110,6 +134,10 @@ Open your browser to:
 | `GET` | `/api/v1/reports/{id}` | Get full hierarchical report detail by UUIDv7 | `200 OK` / `404` |
 | `GET` | `/api/v1/reports/period/{period_date}` | Lookup full report by ISO period (e.g. `2026-10-01`) | `200 OK` / `404` |
 | `DELETE`| `/api/v1/reports/{id}` | Delete report (cascades and deletes sections and items) | `204 No Content` |
+| `POST` | `/api/v1/unit-bills` | Ingest or overwrite a unit bill by (unit_code, period_date) | `201 Created` / `200 OK` |
+| `GET` | `/api/v1/unit-bills` | List unit bills (filters: `tower`, `unit_number`, `unit_code`) | `200 OK` |
+| `GET` | `/api/v1/unit-bills/{id}` | Get full unit bill hierarchy (concepts, consumptions, charges) | `200 OK` / `404` |
+| `DELETE`| `/api/v1/unit-bills/{id}` | Delete unit bill (cascades to concepts, consumptions, charges) | `204 No Content` |
 | `POST` | `/api/v1/sync/pending` | Batch reconcile all files in pending queue into SQLite | `200 OK` |
 | `GET` | `/api/v1/sync/status` | Telemetry report of counts across pending, synced, and failed | `200 OK` |
 

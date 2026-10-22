@@ -458,3 +458,76 @@ plt.savefig("output.png", dpi=100)
     # Clean up generated test chart
     os.remove(sandbox_res.chart_path)
 
+
+def test_planner_node_decoupled_unit_parsing_and_guards():
+    """Verify planner_node handles natural variations (506b), tower-only guard, missing tower clarification, and resume."""
+    from analytics.nodes import planner_node
+    from analytics.state import IntentPlan
+
+    mock_client = MagicMock()
+
+    # 1. Test "506b"
+    mock_resp = MagicMock()
+    mock_resp.text = IntentPlan(
+        is_authorized_query=True,
+        knowledge_domain="unit",
+        analysis_goal="Evolución 506b",
+        target_unit="506B",
+    ).model_dump_json()
+    mock_client.models.generate_content.return_value = mock_resp
+
+    state_506b: DataAnalystState = {"user_query": "muestrame la evolucion del depto 506b"}
+    res1 = planner_node(state_506b, client=mock_client)
+    plan1 = res1["intent_plan"]
+    assert plan1.unit_tower == "B"
+    assert plan1.unit_number == 506
+    assert plan1.target_unit == "B-506"
+    assert plan1.needs_clarification is False
+
+    # 2. Test "gastos de la torre B" (Granularity guard)
+    mock_resp2 = MagicMock()
+    mock_resp2.text = IntentPlan(
+        is_authorized_query=True,
+        knowledge_domain="building",
+        analysis_goal="Gastos torre B",
+    ).model_dump_json()
+    mock_client.models.generate_content.return_value = mock_resp2
+
+    state_tower_only: DataAnalystState = {"user_query": "muestrame los gastos de la torre B"}
+    res2 = planner_node(state_tower_only, client=mock_client)
+    plan2 = res2["intent_plan"]
+    assert plan2.needs_clarification is True
+    assert "no están desagregados por torre" in plan2.clarification_prompt
+
+    # 3. Test "depto 506" (Missing tower -> dynamic DB-backed clarification)
+    mock_resp3 = MagicMock()
+    mock_resp3.text = IntentPlan(
+        is_authorized_query=True,
+        knowledge_domain="unit",
+        analysis_goal="Gasto depto 506",
+        target_unit="506",
+    ).model_dump_json()
+    mock_client.models.generate_content.return_value = mock_resp3
+
+    state_no_tower: DataAnalystState = {"user_query": "muestrame el gasto comun del depto 506"}
+    with patch("analytics.nodes.query_data_gateway", return_value=([{"tower": "B"}], None)):
+        res3 = planner_node(state_no_tower, client=mock_client)
+        plan3 = res3["intent_plan"]
+        assert plan3.needs_clarification is True
+        assert plan3.unit_number == 506
+        assert "Torre B (B-506)" in plan3.candidate_options
+
+    # 4. Resume from clarification
+    state_resumed: DataAnalystState = {
+        "user_query": "muestrame el gasto comun del depto 506",
+        "user_clarification_choice": "Torre B (B-506)",
+    }
+    with patch("analytics.nodes.query_data_gateway", return_value=([{"tower": "B"}], None)):
+        res4 = planner_node(state_resumed, client=mock_client)
+        plan4 = res4["intent_plan"]
+        assert plan4.needs_clarification is False
+        assert plan4.unit_tower == "B"
+        assert plan4.unit_number == 506
+        assert plan4.target_unit == "B-506"
+
+

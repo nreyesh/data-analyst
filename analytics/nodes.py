@@ -135,6 +135,73 @@ def planner_node(state: DataAnalystState, client: genai.Client | None = None) ->
 
     plan = IntentPlan.model_validate_json(response.text)
 
+    # Resolve tower from user clarification choice if available
+    if user_choice:
+        m_tower = re.search(r"Torre\s+([A-Za-z]+)", user_choice, re.I)
+        if m_tower:
+            plan.unit_tower = m_tower.group(1).upper()
+
+    # Normalize unit dimensions from query text or planner output
+    raw_text = f"{state.get('user_query', '')} {plan.target_unit or ''}"
+    m_tower_only = re.search(r"\btorre\s+([A-Za-z0-9]{1,2})\b", raw_text, re.I)
+    m_depto_num = re.search(r"\b(?:depto|departamento|dpto|unidad)\s*[-#]?\s*(\d{1,4})\b", raw_text, re.I)
+    m3 = re.search(r"\b(?:depto|departamento|dpto|unidad)?\s*(\d{1,4})\s*(?:de\s+la\s+|en\s+)?torre\s+([A-Za-z0-9]{1,2})\b", raw_text, re.I)
+    m4 = re.search(r"\btorre\s+([A-Za-z0-9]{1,2})\s*(?:depto|departamento|dpto|unidad)?\s*(\d{1,4})\b", raw_text, re.I)
+    m2 = re.search(r"\b(\d{1,4})\s*[-]?\s*([A-Za-z]{1,2})\b", raw_text)
+    m1 = re.search(r"\b([A-Za-z]{1,2})\s*[-]\s*(\d{1,4})\b", raw_text)
+
+    if plan.knowledge_domain in ("unit", "cross_domain") or m_depto_num or m3 or m4 or m2 or m1:
+        if not plan.unit_tower or not plan.unit_number:
+            if m3:
+                plan.unit_number = plan.unit_number or int(m3.group(1))
+                plan.unit_tower = plan.unit_tower or m3.group(2).upper()
+            elif m4:
+                plan.unit_tower = plan.unit_tower or m4.group(1).upper()
+                plan.unit_number = plan.unit_number or int(m4.group(2))
+            elif m2:
+                plan.unit_number = plan.unit_number or int(m2.group(1))
+                plan.unit_tower = plan.unit_tower or m2.group(2).upper()
+            elif m1:
+                plan.unit_tower = plan.unit_tower or m1.group(1).upper()
+                plan.unit_number = plan.unit_number or int(m1.group(2))
+            elif m_depto_num:
+                plan.unit_number = plan.unit_number or int(m_depto_num.group(1))
+
+    # Granularity Guard: Reject tower-only requests without unit number
+    if m_tower_only and not m_depto_num and not m3 and not m4 and not m2 and not m1 and not plan.unit_number:
+        if re.search(r"\b(gasto|cobro|evolucion|consumo|total).*\btorre\s+([A-Za-z]+)\b", raw_text, re.I):
+            plan.needs_clarification = True
+            plan.clarification_prompt = (
+                f"Los gastos comunes no están desagregados por torre (Torre {m_tower_only.group(1).upper()}), "
+                "sino a nivel de edificio completo o de departamento individual. "
+                "Por favor indica el número de departamento específico a consultar."
+            )
+            plan.candidate_options = []
+
+    # Dynamic DB-backed clarification if unit_number is present but tower is missing
+    if plan.unit_number and not plan.unit_tower and not user_choice:
+        plan.knowledge_domain = "unit"
+        towers: list[str] = []
+        try:
+            sql_towers = f"SELECT DISTINCT tower FROM unit_bills WHERE unit_number = {plan.unit_number} ORDER BY tower ASC;"
+            rows, err = query_data_gateway(sql=sql_towers)
+            if rows and not err:
+                towers = [str(r["tower"]) for r in rows if r.get("tower")]
+        except Exception:
+            towers = []
+        plan.needs_clarification = True
+        plan.clarification_prompt = f"¿A qué torre corresponde el departamento {plan.unit_number}?"
+        if towers:
+            plan.candidate_options = [f"Torre {t} ({t}-{plan.unit_number})" for t in towers]
+        else:
+            plan.candidate_options = [f"Torre A (A-{plan.unit_number})", f"Torre B (B-{plan.unit_number})"]
+
+    # Canonicalize target_unit when both are present
+    if plan.unit_tower and plan.unit_number:
+        plan.target_unit = f"{plan.unit_tower.upper().strip()}-{plan.unit_number}"
+        if plan.knowledge_domain == "building":
+            plan.knowledge_domain = "unit"
+
     # Enforce temporal resolution invariant for variance and time series
     if plan.analysis_type in ("variance_driver", "time_series_trend"):
         plan.temporal_resolution = "monthly"
@@ -144,16 +211,20 @@ def planner_node(state: DataAnalystState, client: genai.Client | None = None) ->
         plan.needs_clarification = False
 
     logger.info(
-        "Planner produced plan: authorized=%s, type=%s, goal=%s, clarify=%s",
+        "Planner produced plan: authorized=%s, type=%s, goal=%s, clarify=%s, tower=%s, unit=%s",
         plan.is_authorized_query,
         plan.analysis_type,
         plan.analysis_goal,
         plan.needs_clarification,
+        plan.unit_tower,
+        plan.unit_number,
     )
 
     return {
         "intent_plan": plan,
         "target_unit": plan.target_unit if plan else None,
+        "unit_tower": plan.unit_tower if plan else None,
+        "unit_number": plan.unit_number if plan else None,
         "retry_count": 0,
     }
 
@@ -166,12 +237,23 @@ def planner_node(state: DataAnalystState, client: genai.Client | None = None) ->
 def trajectory_inspector_node(state: DataAnalystState) -> dict[str, Any]:
     """Execute Hop 1 macro query on expense_reports (or unit_bills) to verify monthly totals across all years."""
     target_unit = state.get("target_unit")
-    if not target_unit:
-        plan = state.get("intent_plan")
-        if plan and plan.target_unit:
-            target_unit = plan.target_unit
+    tower = state.get("unit_tower")
+    number = state.get("unit_number")
+    plan = state.get("intent_plan")
+    if plan:
+        target_unit = target_unit or plan.target_unit
+        tower = tower or plan.unit_tower
+        number = number or plan.unit_number
 
-    if target_unit:
+    if tower and number is not None:
+        safe_tower = tower.strip().upper().replace("'", "")
+        sql = (
+            "SELECT period_date, period_year, period_month, "
+            "calculated_dept_subtotal, calculated_consumo_total, "
+            "calculated_unit_subtotal, calculated_total_month AS calculated_grand_total "
+            f"FROM unit_bills WHERE tower = '{safe_tower}' AND unit_number = {int(number)} ORDER BY period_date ASC"
+        )
+    elif target_unit:
         safe_unit = target_unit.strip().upper().replace("'", "")
         sql = (
             "SELECT period_date, period_year, period_month, "
