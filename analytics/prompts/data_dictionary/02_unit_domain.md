@@ -73,9 +73,14 @@ Breakdown rows in "Tabla Gastos por Unidad" (Fines, fixed charges, recargos).
 
 ## 3. Sample Queries
 
-### Unit Monthly Evolution
+### Unit Monthly Evolution (Mandatory 4 Reconciled Components)
 ```sql
-SELECT period_date, calculated_dept_subtotal, calculated_consumo_total, calculated_unit_subtotal, calculated_total_month
+SELECT 
+    period_date, 
+    calculated_dept_subtotal, 
+    calculated_consumo_total, 
+    calculated_unit_subtotal, 
+    calculated_total_month
 FROM unit_bills
 WHERE tower = 'B' AND unit_number = 504
 ORDER BY period_date ASC;

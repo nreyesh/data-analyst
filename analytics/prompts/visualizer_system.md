@@ -24,19 +24,26 @@ with open("dataset.json", "r", encoding="utf-8") as f:
 * Always check `isinstance(data, dict)` when writing scripts for multi-analysis runs, or inspect the keys provided in the prompt sample.
 
 ### Output Destination
-The script MUST save the rendered chart to `output.png`:
+The script MUST save the rendered chart to `output.png` using `bbox_inches='tight'`:
 ```python
 plt.tight_layout()
-plt.savefig("output.png", dpi=150)
+plt.savefig("output.png", dpi=150, bbox_inches="tight")
 ```
 Do NOT call `plt.show()`.
 
 ### Design & Formatting Standards
-* **Currency:** Values are in Chilean Pesos (CLP). Format large numbers cleanly (e.g. convert to Millions CLP: `val / 1_000_000` with label `'Millones CLP'`, or use ticker formatting).
+* **Currency:** Values are in Chilean Pesos (CLP). Format large numbers cleanly (e.g. convert to Millions CLP: `val / 1_000_000` with label `'Millones CLP'`, or use thousands separators `f"${val:,.0f}".replace(",", ".")`).
 * **Dates & Period Labels:** Explicitly label dates and comparison periods in chart titles and axis labels (e.g. `'Mayo 2026 vs Julio 2026'`, `'2025 vs 2026 (Ene-Sep)'`, or `'YYYY-MM'`).
 * **Styling:** Use a clean modern style, readable font sizes (title 12-14pt, labels 10pt), subtle grid lines (`alpha=0.4, linestyle='--'`).
 * **Line Charts:** Include markers (`marker='o'`).
 * **Bar Charts:** Add data value labels on top of bars where appropriate.
+* **Legend Anti-Collision Standard:**
+  * NEVER place legends inside the axes where they collide with peaks or numerical value labels.
+  * Standardize on an **Exterior Bottom-Centered Legend**:
+    `ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.18), ncol=4, frameon=True, fontsize=8.5)`
+  * Always add **20% vertical headroom** to the Y-axis so value labels above peaks never collide with chart headers or edges:
+    `ax.set_ylim(bottom=0, top=max(y_values) * 1.20)`
+  * In multi-panel subplots, adjust vertical spacing with `plt.subplots_adjust(hspace=0.45)` so the upper panel's legend never touches the lower panel's title.
 
 ### Security & Isolation
 * Do NOT import `sqlite3`, `sqlalchemy`, `requests`, `socket`, or `os`.
@@ -58,23 +65,57 @@ Do NOT call `plt.show()`.
 3. **`time_series_trend`**:
    * Render a chronological line plot with markers (`marker='o'`) and data labels on key peaks and troughs.
 
-4. **Recipe A: `unit_stacked_evolution` (Stacked Component Evolution for Apartments)**:
-   * When data contains unit billing components (`calculated_dept_subtotal` / `base_gasto_comun`, `calculated_consumo_total` / `consumos_total`, and `calculated_unit_subtotal` / `fondos_recargos`):
-   * Render a stacked bar chart using `bottom=...` stacking:
+4. **Recipe A: `unit_reconciled_evolution` (Mandatory 4-Component Additive Reconciliation for Apartments)**:
+   * When data contains unit billing components (`calculated_dept_subtotal`, `calculated_consumo_total`, `calculated_unit_subtotal`, and `calculated_total_month`):
+   * **MANDATORY 4-SERIES RECONCILIATION**: The script MUST plot all 4 series. NEVER omit `calculated_unit_subtotal`!
+     1. `'Total Unidad'`: `row['calculated_total_month']` (solid bold line, e.g. `#e74c3c`, marker='o', linewidth=2.5)
+     2. `'Gasto Común Depto'`: `row['calculated_dept_subtotal']` (dashed line, e.g. `#34495e`, marker='s')
+     3. `'Agua Caliente'`: `row['calculated_consumo_total']` (dotted line, e.g. `#27ae60`, marker='^')
+     4. `'Cargos Particulares (Multas, Seguros, otros)'`: `row['calculated_unit_subtotal']` (dash-dot line, e.g. `#8e44ad`, marker='D')
+   * **Zero Handling**: If an apartment has $0 CLP in `calculated_unit_subtotal` for some months, plot cleanly at 0 CLP.
+   * **Exterior Anti-Collision Legend & Headroom**:
    ```python
-   fig, ax = plt.subplots(figsize=(10, 5.5))
-   b1 = ax.bar(periods, base, label="Base Prorrateo", color="#3498db")
-   b2 = ax.bar(periods, consumos, bottom=base, label="Consumos (Agua/Gas)", color="#2ecc71")
-   bottom_for_fondos = [b + c for b, c in zip(base, consumos)]
-   b3 = ax.bar(periods, fondos, bottom=bottom_for_fondos, label="Gastos Unidad / Fondos", color="#e74c3c")
-   # Annotate total on top of each bar
-   for i, (tot, p) in enumerate(zip(totals, periods)):
-       ax.text(i, tot + 1500, f"${tot:,.0f}".replace(",", "."), ha="center", va="bottom", fontsize=9, fontweight="bold")
-   ax.set_ylabel("Monto Total (CLP)")
-   ax.legend(loc="upper left")
+   fig, ax = plt.subplots(figsize=(11, 5.5))
+   ax.plot(periods, totals, label="Total Unidad", color="#e74c3c", linewidth=2.5, marker="o")
+   ax.plot(periods, depto, label="Gasto Común Depto", color="#34495e", linestyle="--", marker="s")
+   ax.plot(periods, consumos, label="Agua Caliente", color="#27ae60", linestyle=":", marker="^")
+   ax.plot(periods, unit_charges, label="Cargos Particulares (Multas, Seguros, otros)", color="#8e44ad", linestyle="-.", marker="D")
+
+   # Headroom to prevent annotation collisions
+   ax.set_ylim(bottom=0, top=max(totals) * 1.20)
+
+   # Annotate Total on peaks
+   for p, tot in zip(periods, totals):
+       ax.annotate(f"${tot:,.0f}".replace(",", "."), (p, tot), textcoords="offset points", xytext=(0, 8), ha="center", fontsize=8.5, fontweight="bold", color="#c0392b")
+
+   ax.set_ylabel("Monto (CLP)")
+   ax.set_xlabel("Período (YYYY-MM)")
+   ax.grid(True, linestyle="--", alpha=0.4)
+   # Exterior bottom-centered legend (no collision)
+   ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=4, frameon=True, fontsize=8.5)
+   plt.tight_layout()
+   plt.savefig("output.png", dpi=150, bbox_inches="tight")
    ```
 
-5. **Recipe B: `dual_axis_tariff` (Tariff vs. Volume Dual-Axis Disentangler)**:
+5. **Recipe B: `unit_stacked_evolution` (Stacked Component Evolution for Apartments)**:
+   * When data requests a stacked breakdown:
+   ```python
+   fig, ax = plt.subplots(figsize=(11, 5.5))
+   b1 = ax.bar(periods, depto, label="Gasto Común Depto", color="#34495e")
+   b2 = ax.bar(periods, consumos, bottom=depto, label="Agua Caliente", color="#27ae60")
+   bottom_for_charges = [d + c for d, c in zip(depto, consumos)]
+   b3 = ax.bar(periods, unit_charges, bottom=bottom_for_charges, label="Cargos Particulares (Multas, Seguros, otros)", color="#8e44ad")
+   # Annotate total on top of each bar
+   for i, (tot, p) in enumerate(zip(totals, periods)):
+       ax.text(i, tot + 1500, f"${tot:,.0f}".replace(",", "."), ha="center", va="bottom", fontsize=8.5, fontweight="bold")
+   ax.set_ylabel("Monto Total (CLP)")
+   ax.set_ylim(bottom=0, top=max(totals) * 1.15)
+   ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=3, frameon=True, fontsize=8.5)
+   plt.tight_layout()
+   plt.savefig("output.png", dpi=150, bbox_inches="tight")
+   ```
+
+6. **Recipe C: `dual_axis_tariff` (Tariff vs. Volume Dual-Axis Disentangler)**:
    * When data contains metered water consumption (`consumption` or `consumption_m3`) and rate (`unit_rate` or `unit_rate_clp`):
    * Render a dual Y-axis plot using `ax.twinx()`:
    ```python

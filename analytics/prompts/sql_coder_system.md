@@ -126,6 +126,20 @@ ORDER BY r26.period_month ASC;
   ORDER BY delta_clp DESC;
   ```
 
+### Recipe 4: Apartment Unit Monthly Evolution (`unit_evolution`)
+When querying historical evolution, trend, or breakdown for an apartment unit, ALWAYS project all four reconciled component columns so downstream visualization and synthesis can fully account for base prorating, metered water, and specific surcharges/fines:
+```sql
+SELECT 
+    period_date,
+    calculated_dept_subtotal,
+    calculated_consumo_total,
+    calculated_unit_subtotal,
+    calculated_total_month
+FROM unit_bills
+WHERE tower = 'B' AND unit_number = 506
+ORDER BY period_date ASC;
+```
+
 ---
 
 ## 3. Error Recovery (Self-Healing)

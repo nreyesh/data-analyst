@@ -196,11 +196,33 @@ def planner_node(state: DataAnalystState, client: genai.Client | None = None) ->
         else:
             plan.candidate_options = [f"Torre A (A-{plan.unit_number})", f"Torre B (B-{plan.unit_number})"]
 
-    # Canonicalize target_unit when both are present
+    # Canonicalize target_unit when both are present and enforce Unit-First Focus Guard
     if plan.unit_tower and plan.unit_number:
         plan.target_unit = f"{plan.unit_tower.upper().strip()}-{plan.unit_number}"
-        if plan.knowledge_domain == "building":
+        is_explicit_building_inquiry = bool(
+            re.search(
+                r"\b(edificio|macro|caldera|compara.*edificio|en relacion al edificio|respecto al edificio)\b",
+                raw_text,
+                re.I,
+            )
+        )
+        if not is_explicit_building_inquiry:
             plan.knowledge_domain = "unit"
+            if len(plan.sub_analyses) > 1:
+                unit_subs = [
+                    s
+                    for s in plan.sub_analyses
+                    if re.search(
+                        r"\b(unidad|depto|departamento|" + str(plan.unit_number) + r")\b",
+                        s,
+                        re.I,
+                    )
+                ]
+                plan.sub_analyses = (
+                    unit_subs[:1]
+                    if unit_subs
+                    else [f"Evolución y desglose mensual de la unidad {plan.target_unit}"]
+                )
 
     # Enforce temporal resolution invariant for variance and time series
     if plan.analysis_type in ("variance_driver", "time_series_trend"):
@@ -654,6 +676,24 @@ def visualizer_node(state: DataAnalystState, client: genai.Client | None = None)
         f"Suggested Chart Type: {plan.suggested_chart_type if plan else 'auto'}\n"
         f"{dataset_description}"
     ]
+
+    first_row = (
+        rows[0]
+        if (rows and isinstance(rows, list) and len(rows) > 0 and isinstance(rows[0], dict))
+        else {}
+    )
+    if "calculated_dept_subtotal" in first_row and "calculated_unit_subtotal" in first_row:
+        contents.append(
+            "CRITICAL APARTMENT RECONCILIATION REQUIREMENT:\n"
+            "Dataset contains apartment unit billing components. You MUST plot all 4 series:\n"
+            "1. 'Total Unidad' (calculated_total_month)\n"
+            "2. 'Gasto Común Depto' (calculated_dept_subtotal)\n"
+            "3. 'Agua Caliente' (calculated_consumo_total)\n"
+            "4. 'Cargos Particulares (Multas, Seguros, otros)' (calculated_unit_subtotal)\n"
+            "DO NOT omit calculated_unit_subtotal. Use the exterior anti-collision legend: "
+            "ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.18), ncol=4, frameon=True, fontsize=8.5) "
+            "and 20% Y-axis headroom to avoid colliding with text labels."
+        )
 
     errors = state.get("error_history", [])
     if errors:
