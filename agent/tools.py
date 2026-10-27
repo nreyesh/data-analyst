@@ -326,6 +326,7 @@ def run_deep_financial_analysis(
     user_context: UserContext,
     query: str,
     unit_code: str | None = None,
+    knowledge_domain: str | None = None,
     thread_id: str | None = None,
     resume_choice: str | None = None,
     workflow_fn: Callable[..., Any] | None = None,
@@ -361,23 +362,28 @@ def run_deep_financial_analysis(
             )
             return {"error": msg, "unauthorized": True, "summary": msg}
 
-        # Allow resident to analyze building-wide macro expenses when explicitly requested
-        if norm_requested is None and _is_explicit_building_macro_query(query):
+        # Allow resident to analyze building-wide macro expenses when explicitly requested or selected
+        if knowledge_domain == "building" or (norm_requested is None and _is_explicit_building_macro_query(query)):
             effective_unit = None
         else:
             effective_unit = assigned_unit
     else:
-        effective_unit = norm_requested
+        effective_unit = None if knowledge_domain == "building" else norm_requested
 
     runner = workflow_fn or run_analytics_workflow
     import inspect
     sig = inspect.signature(runner)
+    has_var_kw = any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+    )
     kwargs: dict[str, Any] = {
         "query": query,
         "target_unit": effective_unit,
         "thread_id": thread_id,
         "resume_choice": resume_choice,
     }
+    if knowledge_domain is not None and ("knowledge_domain" in sig.parameters or has_var_kw):
+        kwargs["knowledge_domain"] = knowledge_domain
     if "status_callback" in sig.parameters:
         kwargs["status_callback"] = status_callback
 

@@ -157,6 +157,7 @@ class DataAnalystState(TypedDict, total=False):
     # 2. OPERATIONAL TIER (Overwritten per pass)
     user_query: str
     target_unit: Optional[str]
+    knowledge_domain: Optional[Literal["building", "unit", "cross_domain"]]
     unit_tower: Optional[str]
     unit_number: Optional[int]
     intent_plan: Optional[IntentPlan]

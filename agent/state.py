@@ -9,11 +9,14 @@ from pydantic import BaseModel, Field, model_validator
 
 UserRole = Literal["admin", "resident"]
 
+KnowledgeDomain = Literal["building", "unit", "cross_domain"]
+
 SupervisorRoute = Literal[
     "lookup_unit_bill",
     "lookup_building_summary",
     "run_deep_financial_analysis",
     "check_system_status",
+    "clarify_intent",
     "direct_response",
 ]
 
@@ -58,13 +61,21 @@ class FocusContext(BaseModel):
         default=None,
         description="Paused analytics workflow thread_id awaiting user clarification",
     )
+    pending_clarification_query: Optional[str] = Field(
+        default=None,
+        description="Original user query paused by Supervisor clarify_intent awaiting disambiguation",
+    )
+    pending_clarification_route: Optional[SupervisorRoute] = Field(
+        default=None,
+        description="Intended target tool route once pending Supervisor clarification is resolved",
+    )
 
 
 class SupervisorDecision(BaseModel):
     """Structured routing decision emitted by the Supervisor node."""
 
     route: SupervisorRoute = Field(
-        description="Selected action route: 'lookup_unit_bill', 'lookup_building_summary', 'run_deep_financial_analysis', 'check_system_status', or 'direct_response'."
+        description="Selected action route: 'lookup_unit_bill', 'lookup_building_summary', 'run_deep_financial_analysis', 'check_system_status', 'clarify_intent', or 'direct_response'."
     )
     reasoning: str = Field(
         default="",
@@ -74,6 +85,10 @@ class SupervisorDecision(BaseModel):
         default="",
         description="Fully self-contained natural language query after resolving follow-up references (e.g. '¿Y el mes anterior?').",
     )
+    knowledge_domain: Optional[KnowledgeDomain] = Field(
+        default=None,
+        description="Resolved domain scope: 'building', 'unit', or 'cross_domain'.",
+    )
     unit_code: Optional[str] = Field(
         default=None,
         description="Requested apartment unit code (e.g. 'B-504') if specified in query or focus.",
@@ -81,6 +96,22 @@ class SupervisorDecision(BaseModel):
     period_date: Optional[str] = Field(
         default=None,
         description="Normalized period date 'YYYY-MM-01' if a specific month is requested.",
+    )
+    needs_clarification: bool = Field(
+        default=False,
+        description="True when route is 'clarify_intent' and user input is required before calling a tool.",
+    )
+    clarification_prompt: Optional[str] = Field(
+        default=None,
+        description="Question in Spanish explaining the ambiguity when route is 'clarify_intent'.",
+    )
+    candidate_options: list[str] = Field(
+        default_factory=list,
+        description="Clickable options in Spanish when route is 'clarify_intent' (empty if asking admin to type a unit code).",
+    )
+    resume_pending_thread: bool = Field(
+        default=False,
+        description="True if the user's message directly answers an active clarification prompt; False if the user switched topics.",
     )
     direct_reply: Optional[str] = Field(
         default=None,

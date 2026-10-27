@@ -1,11 +1,11 @@
-"""LangGraph Conversational Supervisor orchestrating Fast-Path tools, Deep Analytics, and RBAC."""
+"""LangGraph Conversational Supervisor orchestrating Fast-Path tools, Deep Analytics, Clarification, and RBAC."""
 
 from __future__ import annotations
 
 import logging
 import re
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Callable
 from google import genai
 from google.genai import types
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
@@ -13,6 +13,7 @@ from langgraph.graph import END, START, StateGraph
 
 from agent.state import (
     FocusContext,
+    KnowledgeDomain,
     SupervisorDecision,
     SupervisorRoute,
     SupervisorState,
@@ -26,6 +27,7 @@ from agent.tools import (
     run_deep_financial_analysis,
 )
 from analytics.config import get_analytics_settings
+from analytics.gateway_client import query_data_gateway
 from analytics.nodes import generate_content_with_fallback, get_gemini_client
 
 logger = logging.getLogger("agent.supervisor")
@@ -98,79 +100,128 @@ def _extract_period_from_text(text: str, focus: FocusContext) -> str | None:
     return None
 
 
-def _extract_unit_from_text(text: str) -> str | None:
-    """Extract explicit apartment code from user query if present."""
+def _extract_unit_dimensions(text: str) -> tuple[str | None, int | None, str | None]:
+    """Extract (unit_tower, unit_number, canonical_unit_code) from text if present."""
+    # 1. Explicit "depto 504 torre B" or "504 de la torre B"
+    m_num_tower = re.search(
+        r"\b(?:depto|departamento|dpto|unidad)?\s*(\d{1,4})\s*(?:de\s+la\s+|en\s+)?torre\s+([A-Za-z0-9]{1,2})\b",
+        text,
+        re.I,
+    )
+    if m_num_tower:
+        num = int(m_num_tower.group(1))
+        tower = m_num_tower.group(2).upper()
+        return tower, num, f"{tower}-{num}"
+
+    # 2. Explicit "Torre B depto 504" or "Torre B - 504"
+    m_tower_num = re.search(
+        r"\btorre\s+([A-Za-z0-9]{1,2})\s*(?:[-]|depto|departamento|dpto|unidad)?\s*(\d{1,4})\b",
+        text,
+        re.I,
+    )
+    if m_tower_num:
+        tower = m_tower_num.group(1).upper()
+        num = int(m_tower_num.group(2))
+        return tower, num, f"{tower}-{num}"
+
+    # 3. Explicit TOWER-NUMBER (e.g. B-504)
     m1 = re.search(r"\b([A-Za-z]{1,2})\s*[-]\s*(\d{1,4})\b", text)
     if m1:
-        return f"{m1.group(1).upper()}-{int(m1.group(2))}"
+        tower = m1.group(1).upper()
+        num = int(m1.group(2))
+        return tower, num, f"{tower}-{num}"
 
+    # 4. Explicit depto/unidad NUMBER-TOWER or NUMBER TOWER (e.g. depto 504B)
     m2 = re.search(
         r"\b(?:depto|departamento|dpto|unidad)\s*[-#]?\s*(\d{1,4})\s*[-]?\s*([A-Za-z]{1,2})\b",
         text,
         re.I,
     )
     if m2:
-        return f"{m2.group(2).upper()}-{int(m2.group(1))}"
+        word_after = m2.group(2).upper()
+        if word_after not in ("DE", "EN", "EL", "LA", "Y", "O", "A"):
+            num = int(m2.group(1))
+            return word_after, num, f"{word_after}-{num}"
 
+    # 5. Explicit NUMBER-TOWER or NUMBER<TOWER> (e.g. 504-B, 504B)
     m3 = re.search(r"\b(\d{1,4})\s*[-]\s*([A-Za-z]{1,2})\b", text)
     if m3:
-        return f"{m3.group(2).upper()}-{int(m3.group(1))}"
+        tower = m3.group(2).upper()
+        num = int(m3.group(1))
+        return tower, num, f"{tower}-{num}"
 
+    m3_compact = re.search(r"\b(\d{2,4})([A-Za-z])\b", text)
+    if m3_compact:
+        num_val = int(m3_compact.group(1))
+        letter = m3_compact.group(2).upper()
+        if not (num_val > 1900 and letter in ("M", "K")):
+            return letter, num_val, f"{letter}-{num_val}"
+
+    # 6. Bare unit number without tower (e.g. "depto 504")
     m4 = re.search(r"\b(?:depto|departamento|dpto|unidad)\s*[-#]?\s*(\d{1,4})\b", text, re.I)
     if m4:
-        return str(int(m4.group(1)))
+        num = int(m4.group(1))
+        return None, num, str(num)
 
-    return None
+    return None, None, None
 
 
-def classify_intent_deterministic(
-    user_message: str,
-    user_context: UserContext,
-    focus: FocusContext,
-) -> SupervisorDecision:
-    """Classify user intent and resolve multi-turn focus deterministically."""
-    text = user_message.strip()
+def _extract_unit_from_text(text: str) -> str | None:
+    """Extract explicit apartment code from user query if present."""
+    _, _, code = _extract_unit_dimensions(text)
+    return code
+
+
+def _lookup_towers_for_unit_number(unit_number: int) -> list[str]:
+    """Query Data Gateway for distinct towers matching a bare apartment number."""
+    try:
+        sql_towers = (
+            f"SELECT DISTINCT tower FROM unit_bills "
+            f"WHERE unit_number = {int(unit_number)} ORDER BY tower ASC;"
+        )
+        rows, err = query_data_gateway(sql=sql_towers)
+        if rows and not err:
+            return [str(r["tower"]).strip().upper() for r in rows if r.get("tower")]
+    except Exception as exc:
+        logger.debug("Tower lookup via Data Gateway failed: %s", exc)
+    return []
+
+
+def _has_explicit_building_scope(text: str) -> bool:
+    """Return True if the query explicitly specifies building/macro scope."""
+    return bool(
+        re.search(
+            r"\b(edificio|comunidad|condominio|gasto\s+operacional|"
+            r"fondo\w*\s+del\s+edificio|total\s+general\s+del\s+edificio|"
+            r"informe\s+general)\b",
+            text.lower(),
+        )
+    )
+
+
+def _has_explicit_unit_self_scope(text: str) -> bool:
+    """Return True if the query explicitly uses personal/unit pronouns or terms."""
+    return bool(
+        re.search(
+            r"\b(cu[aá]nto\s+debo|mi\s+cuenta|mi\s+gasto|mi\s+departamento|mi\s+depto|mi\s+unidad|"
+            r"mi\s+consumo|mi\s+[uú]ltimo\s+pago|mi\s+lectura|mi\s+boleta|"
+            r"nota\s+de\s+cobro|al[ií]cuota|deuda\s+del|detalle\s+de\s+mi)\b",
+            text.lower(),
+        )
+    )
+
+
+def _has_cross_domain_terms(text: str) -> bool:
+    """Return True if query explicitly asks for both building and unit / impact of building on unit."""
     lowered = text.lower()
+    if re.search(r"\b(ambos|impacto\s+del\s+edificio|en\s+relaci[oó]n\s+al\s+edificio|respecto\s+al\s+edificio)\b", lowered):
+        return True
+    return _has_explicit_building_scope(text) and _has_explicit_unit_self_scope(text)
 
-    period_date = _extract_period_from_text(text, focus)
-    extracted_unit = _extract_unit_from_text(text)
-    effective_unit = extracted_unit or (
-        user_context.unit_code if user_context.role == "resident" else focus.last_unit
-    )
 
-    # 1. Follow-up anaphora (e.g., "¿Y el mes anterior?", "¿Y en julio?")
-    is_short_followup = bool(
-        re.match(
-            r"^[¿?¡!\s]*(y\s+)?(el\s+mes\s+anterior|el\s+mes\s+pasado|en\s+[a-záéíóú]+(\s+20\d{2})?|y\s+el\s+depto|y\s+la\s+unidad)\b",
-            lowered,
-        )
-    )
-    if is_short_followup and focus.last_route in ("lookup_unit_bill", "lookup_building_summary"):
-        target_period = period_date or focus.last_period
-        return SupervisorDecision(
-            route=focus.last_route,
-            reasoning="Resolución de pregunta de seguimiento manteniendo la ruta previa y actualizando el periodo.",
-            resolved_query=f"Consulta de seguimiento ({focus.last_route}) para periodo {target_period}",
-            unit_code=effective_unit,
-            period_date=target_period,
-        )
-
-    # 2. System diagnostics / spool status
-    if re.search(
-        r"\b(spool|sincronizaci[oó]n|cola\s+de|estado\s+del\s+sistema|diagn[oó]stico|meses\s+cargados|"
-        r"periodos\s+cargados|informes\s+cargados)\b",
-        lowered,
-    ):
-        return SupervisorDecision(
-            route="check_system_status",
-            reasoning="Consulta sobre diagnóstico del sistema, periodos cargados o cola de sincronización.",
-            resolved_query=text,
-            unit_code=None,
-            period_date=None,
-        )
-
-    # 3. Deep financial analysis (trends, evolution, variance, why it rose/fell, charts, comparisons)
-    has_causal_or_trend = bool(
+def _is_causal_or_trend_query(text: str) -> bool:
+    """Return True if query asks for time series evolution, variance drivers, or comparisons."""
+    return bool(
         re.search(
             r"\b(evolucion\w*|tendencia\w*|por\s*qu[eé]|poruqe|subi\w*|baj\w*|aument\w*|increment\w*|"
             r"disminu\w*|alza\w*|variaci[oó]n\w*|vario|vari[oó]|variaron|cambios?|cambi[oó]|"
@@ -178,113 +229,370 @@ def classify_intent_deterministic(
             r"m[aá]s\s+altos?|m[aá]s\s+caros?|mayor\s+consumo|ranking|en\s+mora|"
             r"este\s+a[ñn]o|[uú]ltimos\s+\d*\s*meses|mes\s+a\s+mes|entre\s+estas\s+fechas|"
             r"entre\s+[a-záéíóú]+\s+y\s+[a-záéíóú]+|de\s+[a-záéíóú]+\s+a\s+[a-záéíóú]+)\b",
-            lowered,
+            text.lower(),
         )
     )
-    is_followup_to_deep_analysis = (
-        focus.last_route == "run_deep_financial_analysis"
-        and bool(
-            re.search(
-                r"\b(estas\s+fechas|esos\s+meses|ese\s+per[ií]odo|dicho\s+per[ií]odo|"
-                r"el\s+concepto|la\s+categor[ií]a|los\s+fondos|el\s+fondo|detall\w*|explic\w*|desglos\w*)\b",
-                lowered,
-            )
-        )
-    )
-    if has_causal_or_trend or is_followup_to_deep_analysis:
-        is_explicit_macro = bool(
-            re.search(
-                r"\b(edificio|comunidad|condominio|gasto\s+operacional)\b",
-                lowered,
-            )
-        ) and not bool(
-            re.search(
-                r"\b(mi\s+gasto|mi\s+depto|mi\s+departamento|mi\s+unidad|mi\s+cuenta)\b",
-                lowered,
-            )
-        )
-        # Preserve building domain on follow-up if previous deep analysis was building-wide
-        keep_building_domain = is_explicit_macro or (
-            is_followup_to_deep_analysis and focus.last_domain == "building" and extracted_unit is None
-        )
-        target_unit_for_analysis = None if keep_building_domain else extracted_unit
 
-        resolved_q = text
-        if (is_short_followup or is_followup_to_deep_analysis) and focus.last_domain:
-            domain_hint = "edificio (expense_reports/expense_sections/expense_items)" if keep_building_domain else f"unidad {target_unit_for_analysis or focus.last_unit}"
-            resolved_q = f"{text} (Contexto previo: análisis de {domain_hint}, periodo={focus.last_period})"
+
+def _check_tower_only_guard(text: str) -> SupervisorDecision | None:
+    """Enforce Granularity Guard when user queries expenses for a tower alone without unit number."""
+    tower, num, _ = _extract_unit_dimensions(text)
+    if tower or num is not None:
+        return None
+    m_tower_only = re.search(r"\btorre\s+([A-Za-z0-9]{1,2})\b", text, re.I)
+    if m_tower_only and re.search(
+        r"\b(gasto\w*|cobro\w*|evolucion\w*|consumo\w*|total\w*|cuenta\w*|boleta\w*)\b",
+        text,
+        re.I,
+    ):
+        tower_label = m_tower_only.group(1).upper()
+        prompt = (
+            f"Los gastos comunes no están desagregados por torre (Torre {tower_label}), "
+            "sino a nivel de edificio completo o de departamento individual. "
+            "Por favor indica el número de departamento específico a consultar."
+        )
+        return SupervisorDecision(
+            route="clarify_intent",
+            reasoning="Granularity Guard: consulta por torre sin número de departamento.",
+            resolved_query=text,
+            needs_clarification=True,
+            clarification_prompt=prompt,
+            candidate_options=[],
+        )
+    return None
+
+
+def _build_turn1_scope_clarification(
+    user_message: str,
+    user_context: UserContext,
+    period_date: str | None,
+) -> SupervisorDecision:
+    """Build Turn 1 Building vs. Unit scope clarification decision for Resident (3 options) or Admin (2 options)."""
+    if user_context.role == "resident":
+        unit = user_context.unit_code or "B-504"
+        prompt = "Para darte una respuesta precisa, ¿qué alcance deseas consultar?"
+        options = [
+            f"Mi departamento ({unit})",
+            "Gasto general del edificio",
+            f"Ambos (impacto del edificio en mi unidad {unit})",
+        ]
+    else:
+        prompt = (
+            "Para darte una respuesta precisa, ¿deseas consultar el gasto general del edificio "
+            "o un departamento específico?"
+        )
+        options = [
+            "Gasto general del edificio",
+            "Consultar un departamento específico",
+        ]
+
+    return SupervisorDecision(
+        route="clarify_intent",
+        reasoning="Consulta inicial ambigua entre alcance de edificio y unidad; se solicita aclaración.",
+        resolved_query=user_message,
+        period_date=period_date,
+        needs_clarification=True,
+        clarification_prompt=prompt,
+        candidate_options=options,
+    )
+
+
+def _apply_entity_and_scope_guards(
+    decision: SupervisorDecision,
+    user_message: str,
+    user_context: UserContext,
+    focus: FocusContext,
+) -> SupervisorDecision:
+    """Enforce deterministic unit/tower resolution, RBAC unit preservation, and Turn 1 scope disambiguation."""
+    # 1. Pure greeting or system status need no unit/scope guards
+    if decision.route in ("direct_response", "check_system_status"):
+        return decision
+
+    # 2. Tower-only Granularity Guard
+    tower_guard = _check_tower_only_guard(user_message)
+    if tower_guard is not None:
+        return tower_guard
+
+    tower, unit_num, extracted_code = _extract_unit_dimensions(user_message)
+    period_date = decision.period_date or _extract_period_from_text(user_message, focus)
+    decision.period_date = period_date
+
+    # 3. Missing-tower check when bare unit number is given (e.g. "depto 504")
+    if unit_num is not None and tower is None:
+        # If resident is querying a different bare unit number, pass through so RBAC blocks it deterministically!
+        if user_context.role == "resident" and user_context.unit_code:
+            assigned_num = user_context.unit_code.split("-")[-1]
+            if str(unit_num) != assigned_num:
+                decision.unit_code = str(unit_num)
+                decision.knowledge_domain = "unit"
+                if decision.route == "clarify_intent":
+                    decision.route = (
+                        "run_deep_financial_analysis"
+                        if _is_causal_or_trend_query(user_message)
+                        else "lookup_unit_bill"
+                    )
+                    decision.needs_clarification = False
+                return decision
+
+        # Discover towers in DB for this unit number
+        towers = _lookup_towers_for_unit_number(unit_num)
+        if len(towers) != 1:
+            options = (
+                [f"Torre {t} ({t}-{unit_num})" for t in towers]
+                if towers
+                else [f"Torre A (A-{unit_num})", f"Torre B (B-{unit_num})"]
+            )
+            prompt = f"¿A qué torre corresponde el departamento {unit_num}?"
+            return SupervisorDecision(
+                route="clarify_intent",
+                reasoning=f"El departamento {unit_num} requiere especificar la torre.",
+                resolved_query=user_message,
+                period_date=period_date,
+                needs_clarification=True,
+                clarification_prompt=prompt,
+                candidate_options=options,
+            )
+        # Exactly 1 tower found in DB -> auto-resolve
+        resolved_unit = f"{towers[0]}-{unit_num}"
+        decision.unit_code = resolved_unit
+        decision.knowledge_domain = decision.knowledge_domain or "unit"
+    elif tower and unit_num is not None:
+        decision.unit_code = f"{tower}-{unit_num}"
+
+    # 4. If LLM already requested clarify_intent, ensure prompt/options are well-formed
+    if decision.route == "clarify_intent":
+        decision.needs_clarification = True
+        if not decision.clarification_prompt:
+            fallback_clarify = _build_turn1_scope_clarification(
+                user_message, user_context, period_date
+            )
+            decision.clarification_prompt = fallback_clarify.clarification_prompt
+            decision.candidate_options = fallback_clarify.candidate_options
+        return decision
+
+    # 5. Admin requesting a unit-scoped route without any unit specified -> prompt to type unit code
+    if (
+        user_context.role == "admin"
+        and decision.route == "lookup_unit_bill"
+        and not decision.unit_code
+        and not focus.last_unit
+    ):
+        return SupervisorDecision(
+            route="clarify_intent",
+            reasoning="Administrador solicitó consulta de unidad sin indicar el código del departamento.",
+            resolved_query=user_message,
+            period_date=period_date,
+            needs_clarification=True,
+            clarification_prompt="Por favor escribe el código del departamento que deseas consultar (por ejemplo, `B-504`).",
+            candidate_options=[],
+        )
+
+    # 6. Turn 1 Cold-Start Scope Ambiguity (Building vs. Unit) when FocusContext has no prior domain
+    has_building = _has_explicit_building_scope(user_message)
+    has_unit_self = _has_explicit_unit_self_scope(user_message)
+    has_explicit_unit = extracted_code is not None
+    has_multi_unit_cohort = bool(
+        re.search(
+            r"\b(departamentos|unidades|vecinos|ranking)\b",
+            user_message.lower(),
+        )
+    )
+
+    if (
+        focus.last_domain is None
+        and not has_building
+        and not has_unit_self
+        and not has_explicit_unit
+        and not has_multi_unit_cohort
+    ):
+        return _build_turn1_scope_clarification(user_message, user_context, period_date)
+
+    # 7. Turn 2+ FocusContext Inheritance when domain/unit not explicitly overridden
+    if not decision.knowledge_domain:
+        if _has_cross_domain_terms(user_message):
+            decision.knowledge_domain = "cross_domain"
+        elif has_building and not has_unit_self and not has_explicit_unit:
+            decision.knowledge_domain = "building"
+        elif has_unit_self or has_explicit_unit or decision.route == "lookup_unit_bill":
+            decision.knowledge_domain = "unit"
+        elif focus.last_domain in ("building", "unit", "cross_domain"):
+            decision.knowledge_domain = focus.last_domain
+        else:
+            decision.knowledge_domain = (
+                "unit" if user_context.role == "resident" else "building"
+            )
+
+    if decision.knowledge_domain == "building":
+        decision.unit_code = None
+    elif decision.knowledge_domain in ("unit", "cross_domain") and not decision.unit_code:
+        decision.unit_code = (
+            user_context.unit_code if user_context.role == "resident" else focus.last_unit
+        )
+
+    # If Admin ended up in unit/cross_domain without a unit_code, ask for the unit code conversationally
+    if (
+        user_context.role == "admin"
+        and decision.knowledge_domain in ("unit", "cross_domain")
+        and not decision.unit_code
+        and not has_multi_unit_cohort
+    ):
+        return SupervisorDecision(
+            route="clarify_intent",
+            reasoning="Se requiere conocer el código del departamento para ejecutar la consulta de unidad.",
+            resolved_query=user_message,
+            period_date=period_date,
+            needs_clarification=True,
+            clarification_prompt="Por favor escribe el código del departamento que deseas consultar (por ejemplo, `B-504`).",
+            candidate_options=[],
+        )
+
+    return decision
+
+
+def _resolve_supervisor_clarification_choice(
+    choice_text: str,
+    user_context: UserContext,
+    focus: FocusContext,
+) -> SupervisorDecision | None:
+    """Resolve a user response to a pending Supervisor clarify_intent turn."""
+    pending_query = focus.pending_clarification_query
+    if not pending_query:
+        return None
+
+    lowered = choice_text.strip().lower()
+    period_date = _extract_period_from_text(pending_query, focus) or focus.last_period
+    target_route: SupervisorRoute = focus.pending_clarification_route or (
+        "run_deep_financial_analysis"
+        if _is_causal_or_trend_query(pending_query)
+        else "lookup_unit_bill"
+    )
+
+    # 1. Option: "Consultar un departamento específico" (Admin two-step flow)
+    if "consultar un departamento espec" in lowered:
+        return SupervisorDecision(
+            route="clarify_intent",
+            reasoning="Administrador seleccionó consultar un departamento específico; se solicita el código de unidad.",
+            resolved_query=pending_query,
+            period_date=period_date,
+            needs_clarification=True,
+            clarification_prompt="Por favor escribe el código del departamento que deseas consultar (por ejemplo, `B-504`).",
+            candidate_options=[],
+            resume_pending_thread=True,
+        )
+
+    # 2. Option: "Ambos (impacto del edificio en mi unidad ...)" -> cross_domain
+    if lowered.startswith("ambos") or "impacto del edificio" in lowered:
+        unit = (
+            _extract_unit_from_text(choice_text)
+            or (user_context.unit_code if user_context.role == "resident" else focus.last_unit)
+        )
         return SupervisorDecision(
             route="run_deep_financial_analysis",
-            reasoning="Consulta analítica de evolución temporal, causa de variación, seguimiento analítico o visualización.",
-            resolved_query=resolved_q,
-            unit_code=target_unit_for_analysis,
+            reasoning="Usuario seleccionó análisis combinado (cross_domain) de edificio y unidad.",
+            resolved_query=f"{pending_query} (Analizar impacto del edificio en la unidad {unit})",
+            knowledge_domain="cross_domain",
+            unit_code=unit,
             period_date=period_date,
+            resume_pending_thread=True,
         )
 
-    # 4. Explicit Macro building snapshot lookup
-    is_explicit_building = bool(
-        re.search(
-            r"\b(edificio|gasto\s+operacional|fondo\w*\s+del\s+edificio|total\s+general\s+del\s+edificio|"
-            r"informe\s+general|gasto\s+com[uú]n\s+total\s+del\s+edificio|resumen\s+del\s+edificio)\b",
-            lowered,
+    # 3. Option: "Gasto general del edificio"
+    if "gasto general del edificio" in lowered or lowered in ("edificio", "el edificio", "2"):
+        bldg_route: SupervisorRoute = (
+            "run_deep_financial_analysis"
+            if _is_causal_or_trend_query(pending_query)
+            else "lookup_building_summary"
         )
-    )
-    if is_explicit_building and extracted_unit is None:
         return SupervisorDecision(
-            route="lookup_building_summary",
-            reasoning="Consulta puntual del resumen de gastos comunes a nivel de edificio.",
-            resolved_query=text,
+            route=bldg_route,
+            reasoning="Usuario seleccionó alcance de gasto general del edificio.",
+            resolved_query=f"{pending_query} (Alcance: gasto general del edificio)",
+            knowledge_domain="building",
             unit_code=None,
             period_date=period_date,
+            resume_pending_thread=True,
         )
 
-    # 5. Unit bill snapshot lookup (explicit unit terms)
-    has_unit_keywords = bool(
-        re.search(
-            r"\b(cu[aá]nto\s+debo|mi\s+cuenta|mi\s+gasto|mi\s+departamento|mi\s+depto|mi\s+unidad|"
-            r"nota\s+de\s+cobro|[uú]ltimo\s+pago|lectura\w*|agua\s+caliente|calefacci[oó]n|"
-            r"al[ií]cuota|deuda\s+del|detalle\s+de\s+mi)\b",
-            lowered,
+    # 4. Option: "Mi departamento (B-504)" or explicit unit/tower selection like "Torre B (B-504)" or typed "B-504"
+    tower, unit_num, extracted_code = _extract_unit_dimensions(choice_text)
+    if "mi departamento" in lowered or "mi unidad" in lowered or (tower and unit_num is not None):
+        unit = (
+            f"{tower}-{unit_num}"
+            if (tower and unit_num is not None)
+            else (user_context.unit_code if user_context.role == "resident" else focus.last_unit)
         )
-    )
-    if has_unit_keywords or extracted_unit is not None:
+        unit_route: SupervisorRoute = (
+            "run_deep_financial_analysis"
+            if _is_causal_or_trend_query(pending_query)
+            else "lookup_unit_bill"
+        )
         return SupervisorDecision(
-            route="lookup_unit_bill",
-            reasoning="Consulta puntual de estado de cuenta, saldo o lecturas de una unidad.",
-            resolved_query=text,
-            unit_code=extracted_unit or (user_context.unit_code if user_context.role == "resident" else focus.last_unit),
+            route=unit_route,
+            reasoning=f"Usuario seleccionó alcance de unidad individual ({unit}).",
+            resolved_query=f"{pending_query} (Unidad {unit})",
+            knowledge_domain="unit",
+            unit_code=unit,
             period_date=period_date,
+            resume_pending_thread=True,
         )
 
-    # 6. Role-aware general expense snapshot (e.g., "dame el detalle del gasto comun de este mes",
-    #    "cuel fue el gasto comun de este mes", "cuanto fue el gasto de este mes")
-    has_general_expense_terms = bool(
-        re.search(
-            r"\b(gasto\s*com[uú]n\w*|gastos\s*comunes|detalle\s+del\s+gasto|total\s+del\s+mes|"
-            r"gasto\s+de\s+este\s+mes|cuenta\s+de\s+este\s+mes|cobro\s+de\s+este\s+mes|"
-            r"cu[aá]nto\s+fue\s+el\s+gasto|cu[aáe]l\s+fue\s+el\s+gasto|resumen\s+de\s+gastos|"
-            r"fondo\w*|total\s+general|cu[aá]nto\s+gast[oó])\b",
-            lowered,
-        )
-    )
-    if has_general_expense_terms:
-        if user_context.role == "resident":
+    # 5. Bare unit number typed by Admin when asked for unit code (e.g. "504") -> trigger tower lookup
+    if unit_num is not None and tower is None and re.match(r"^(?:depto|departamento|unidad)?\s*[-#]?\s*\d{1,4}$", lowered):
+        towers = _lookup_towers_for_unit_number(unit_num)
+        if len(towers) == 1:
+            unit = f"{towers[0]}-{unit_num}"
             return SupervisorDecision(
-                route="lookup_unit_bill",
-                reasoning="Residente consultando el detalle o monto del gasto común del mes; se enruta a su unidad asignada.",
-                resolved_query=text,
-                unit_code=user_context.unit_code,
+                route=target_route,
+                reasoning=f"Unidad {unit} resuelta para la consulta pendiente.",
+                resolved_query=f"{pending_query} (Unidad {unit})",
+                knowledge_domain="unit",
+                unit_code=unit,
                 period_date=period_date,
+                resume_pending_thread=True,
             )
+        options = (
+            [f"Torre {t} ({t}-{unit_num})" for t in towers]
+            if towers
+            else [f"Torre A (A-{unit_num})", f"Torre B (B-{unit_num})"]
+        )
         return SupervisorDecision(
-            route="lookup_building_summary",
-            reasoning="Administrador consultando el resumen o monto de gastos comunes del mes a nivel edificio.",
-            resolved_query=text,
-            unit_code=None,
+            route="clarify_intent",
+            reasoning=f"El departamento {unit_num} requiere especificar la torre.",
+            resolved_query=pending_query,
             period_date=period_date,
+            needs_clarification=True,
+            clarification_prompt=f"¿A qué torre corresponde el departamento {unit_num}?",
+            candidate_options=options,
+            resume_pending_thread=True,
         )
 
-    # 7. Explicit Greetings / Help menu ONLY when message is a greeting or help inquiry
+    return None
+
+
+def _looks_like_analytics_clarification_answer(text: str) -> bool:
+    """Heuristic check for whether free text answers a paused Analytics Hop 1 clarification."""
+    lowered = text.strip().lower()
+    if re.match(r"^[123]$", lowered):
+        return True
+    if re.search(
+        r"\b(opci[oó]n\s*[123]|primera|segunda|tercera|analizar\s+el|analizar\s+la|"
+        r"alza\s+de|baja\s+de|variaci[oó]n\s+de|comparaci[oó]n|torre\s+[a-z])\b",
+        lowered,
+    ):
+        return True
+    return False
+
+
+def classify_intent_deterministic(
+    user_message: str,
+    user_context: UserContext,
+    focus: FocusContext,
+) -> SupervisorDecision:
+    """Deterministic fallback intent classifier used when LLM client/API key is unavailable."""
+    text = user_message.strip()
+    lowered = text.lower()
+
+    # 0. Explicit Greetings / Help menu ONLY when message is a pure greeting or help inquiry
     is_pure_greeting_or_help = bool(
         re.match(
             r"^[¡!¿?\s]*(hola|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|hey|saludos|"
@@ -315,46 +623,220 @@ def classify_intent_deterministic(
             direct_reply=reply,
         )
 
-    # 8. Non-greeting financial/analytical fallback -> delegate to deep analytics engine
-    return SupervisorDecision(
+    period_date = _extract_period_from_text(text, focus)
+    _, _, extracted_unit = _extract_unit_dimensions(text)
+    effective_unit = extracted_unit or (
+        user_context.unit_code if user_context.role == "resident" else focus.last_unit
+    )
+
+    # 1. System diagnostics / spool status
+    if re.search(
+        r"\b(spool|sincronizaci[oó]n|cola\s+de|estado\s+del\s+sistema|diagn[oó]stico|meses\s+cargados|"
+        r"periodos\s+cargados|informes\s+cargados)\b",
+        lowered,
+    ):
+        return SupervisorDecision(
+            route="check_system_status",
+            reasoning="Consulta sobre diagnóstico del sistema, periodos cargados o cola de sincronización.",
+            resolved_query=text,
+            unit_code=None,
+            period_date=None,
+        )
+
+    # 2. Follow-up anaphora (e.g., "¿Y el mes anterior?", "¿Y en julio?")
+    is_short_followup = bool(
+        re.match(
+            r"^[¿?¡!\s]*(y\s+)?(el\s+mes\s+anterior|el\s+mes\s+pasado|en\s+[a-záéíóú]+(\s+20\d{2})?|y\s+el\s+depto|y\s+la\s+unidad)\b",
+            lowered,
+        )
+    )
+    if is_short_followup and focus.last_route in ("lookup_unit_bill", "lookup_building_summary"):
+        target_period = period_date or focus.last_period
+        domain: KnowledgeDomain = (
+            "building" if focus.last_route == "lookup_building_summary" else "unit"
+        )
+        return SupervisorDecision(
+            route=focus.last_route,
+            reasoning="Resolución de pregunta de seguimiento manteniendo la ruta previa y actualizando el periodo.",
+            resolved_query=f"Consulta de seguimiento ({focus.last_route}) para periodo {target_period}",
+            knowledge_domain=domain,
+            unit_code=None if domain == "building" else effective_unit,
+            period_date=target_period,
+        )
+
+    # 3. Deep financial analysis (trends, evolution, variance, why it rose/fell, charts, comparisons)
+    has_causal_or_trend = _is_causal_or_trend_query(text)
+    is_followup_to_deep_analysis = (
+        focus.last_route == "run_deep_financial_analysis"
+        and bool(
+            re.search(
+                r"\b(estas\s+fechas|esos\s+meses|ese\s+per[ií]odo|dicho\s+per[ií]odo|"
+                r"el\s+concepto|la\s+categor[ií]a|los\s+fondos|el\s+fondo|detall\w*|explic\w*|desglos\w*)\b",
+                lowered,
+            )
+        )
+    )
+    if has_causal_or_trend or is_followup_to_deep_analysis:
+        has_building = _has_explicit_building_scope(text)
+        has_unit_self = _has_explicit_unit_self_scope(text)
+        is_cross = _has_cross_domain_terms(text)
+
+        keep_building_domain = (has_building and not has_unit_self and extracted_unit is None) or (
+            (is_short_followup or is_followup_to_deep_analysis)
+            and focus.last_domain == "building"
+            and extracted_unit is None
+            and not has_unit_self
+        )
+        if is_cross:
+            resolved_domain: KnowledgeDomain | None = "cross_domain"
+        elif keep_building_domain:
+            resolved_domain = "building"
+        elif has_unit_self or extracted_unit is not None:
+            resolved_domain = "unit"
+        elif focus.last_domain in ("building", "unit", "cross_domain"):
+            resolved_domain = focus.last_domain
+        else:
+            resolved_domain = None
+
+        target_unit_for_analysis = (
+            None
+            if resolved_domain == "building"
+            else (extracted_unit or effective_unit)
+        )
+
+        resolved_q = text
+        if (is_short_followup or is_followup_to_deep_analysis) and focus.last_domain:
+            domain_hint = (
+                "edificio (expense_reports/expense_sections/expense_items)"
+                if resolved_domain == "building"
+                else f"unidad {target_unit_for_analysis or focus.last_unit}"
+            )
+            resolved_q = f"{text} (Contexto previo: análisis de {domain_hint}, periodo={focus.last_period})"
+
+        decision = SupervisorDecision(
+            route="run_deep_financial_analysis",
+            reasoning="Consulta analítica de evolución temporal, causa de variación, seguimiento analítico o visualización.",
+            resolved_query=resolved_q,
+            knowledge_domain=resolved_domain,
+            unit_code=target_unit_for_analysis,
+            period_date=period_date,
+        )
+        return _apply_entity_and_scope_guards(decision, text, user_context, focus)
+
+    # 4. Explicit Macro building snapshot lookup
+    if _has_explicit_building_scope(text) and extracted_unit is None and not _has_explicit_unit_self_scope(text):
+        return SupervisorDecision(
+            route="lookup_building_summary",
+            reasoning="Consulta puntual del resumen de gastos comunes a nivel de edificio.",
+            resolved_query=text,
+            knowledge_domain="building",
+            unit_code=None,
+            period_date=period_date,
+        )
+
+    # 5. Unit bill snapshot lookup (explicit unit terms)
+    has_unit_keywords = _has_explicit_unit_self_scope(text) or bool(
+        re.search(r"\b(agua\s+caliente|calefacci[oó]n|lectura\w*|[uú]ltimo\s+pago)\b", lowered)
+    )
+    if has_unit_keywords or extracted_unit is not None:
+        decision = SupervisorDecision(
+            route="lookup_unit_bill",
+            reasoning="Consulta puntual de estado de cuenta, saldo o lecturas de una unidad.",
+            resolved_query=text,
+            knowledge_domain="unit",
+            unit_code=extracted_unit or (user_context.unit_code if user_context.role == "resident" else focus.last_unit),
+            period_date=period_date,
+        )
+        return _apply_entity_and_scope_guards(decision, text, user_context, focus)
+
+    # 6. General expense snapshot terms (may be ambiguous on Turn 1 or inherit FocusContext on Turn 2+)
+    has_general_expense_terms = bool(
+        re.search(
+            r"\b(gasto\s*com[uú]n\w*|gastos\s*comunes|detalle\s+del\s+gasto|total\s+del\s+mes|"
+            r"gasto\s+de\s+este\s+mes|cuenta\s+de\s+este\s+mes|cobro\s+de\s+este\s+mes|"
+            r"cu[aá]nto\s+fue\s+el\s+gasto|cu[aáe]l\s+fue\s+el\s+gasto|resumen\s+de\s+gastos|"
+            r"fondo\w*|total\s+general|cu[aá]nto\s+gast[oó])\b",
+            lowered,
+        )
+    )
+    if has_general_expense_terms:
+        if focus.last_domain == "building":
+            route: SupervisorRoute = "lookup_building_summary"
+        elif focus.last_domain in ("unit", "cross_domain"):
+            route = "lookup_unit_bill"
+        else:
+            route = "lookup_unit_bill" if user_context.role == "resident" else "lookup_building_summary"
+        decision = SupervisorDecision(
+            route=route,
+            reasoning="Consulta sobre el detalle o monto del gasto común del mes.",
+            resolved_query=text,
+            knowledge_domain=focus.last_domain if focus.last_domain in ("building", "unit") else None,
+            unit_code=effective_unit if focus.last_domain == "unit" else None,
+            period_date=period_date,
+        )
+        return _apply_entity_and_scope_guards(decision, text, user_context, focus)
+
+    # 7. Non-greeting financial/analytical fallback -> delegate to deep analytics engine
+    decision = SupervisorDecision(
         route="run_deep_financial_analysis",
         reasoning="Consulta abierta delegada al motor analítico.",
         resolved_query=text,
-        unit_code=extracted_unit or (user_context.unit_code if user_context.role == "resident" else focus.last_unit),
+        knowledge_domain=focus.last_domain if focus.last_domain in ("building", "unit", "cross_domain") else None,
+        unit_code=effective_unit,
         period_date=period_date,
     )
+    return _apply_entity_and_scope_guards(decision, text, user_context, focus)
 
 
 def supervisor_router_node(
     state: SupervisorState,
     llm_client: genai.Client | None = None,
 ) -> dict[str, Any]:
-    """Classify user message into a SupervisorDecision, handling clarification resumptions first."""
+    """Classify user message into a SupervisorDecision using LLM-first routing and upfront clarification."""
     user_context = state["user_context"]
     focus = state.get("focus") or FocusContext()
-    user_msg = state.get("user_message", "")
+    user_msg = (state.get("user_message") or "").strip()
     clarification_choice = state.get("clarification_choice")
 
-    # Fast-track resumption when user clicks a clarification button or answers an active interrupt
-    if clarification_choice and focus.active_analytics_thread_id:
-        decision = SupervisorDecision(
-            route="run_deep_financial_analysis",
-            reasoning="Reanudando flujo analítico pausado con la selección de aclaración del usuario.",
-            resolved_query=clarification_choice,
-            unit_code=user_context.unit_code if user_context.role == "resident" else focus.last_unit,
-            period_date=focus.last_period,
-        )
-        return {"decision": decision}
+    # 1. Explicit button click (`clarification_choice` passed by Chainlit Action)
+    if clarification_choice:
+        # 1a. Resolving a Supervisor-level pending clarification
+        if focus.pending_clarification_query and not focus.active_analytics_thread_id:
+            sup_res = _resolve_supervisor_clarification_choice(
+                clarification_choice, user_context, focus
+            )
+            if sup_res is not None:
+                return {"decision": sup_res}
 
+        # 1b. Resuming a paused Analytics Hop 1 clarification thread
+        if focus.active_analytics_thread_id:
+            decision = SupervisorDecision(
+                route="run_deep_financial_analysis",
+                reasoning="Reanudando flujo analítico pausado con la selección de aclaración del usuario.",
+                resolved_query=clarification_choice,
+                knowledge_domain=focus.last_domain if focus.last_domain in ("building", "unit", "cross_domain") else None,
+                unit_code=user_context.unit_code if user_context.role == "resident" else focus.last_unit,
+                period_date=focus.last_period,
+                resume_pending_thread=True,
+            )
+            return {"decision": decision}
+
+    # 2. Free-text message when a Supervisor-level clarification is pending
+    if focus.pending_clarification_query and not focus.active_analytics_thread_id:
+        sup_res = _resolve_supervisor_clarification_choice(
+            user_msg, user_context, focus
+        )
+        if sup_res is not None:
+            return {"decision": sup_res}
+
+    # 3. Pure greeting fast-path (avoids unnecessary LLM call on "hola" / "ayuda")
     heuristic_decision = classify_intent_deterministic(user_msg, user_context, focus)
     if heuristic_decision.route == "direct_response":
         return {"decision": heuristic_decision}
 
-    is_unclassified_fallback = (
-        heuristic_decision.reasoning == "Consulta abierta delegada al motor analítico."
-    )
+    # 4. Primary Router: Gemini LLM with SupervisorDecision structured schema
     active_llm_client = llm_client
-    if active_llm_client is None and is_unclassified_fallback:
+    if active_llm_client is None:
         settings = get_analytics_settings()
         if settings.gemini_api_key:
             try:
@@ -389,6 +871,21 @@ def supervisor_router_node(
                 config=config,
             )
             decision = SupervisorDecision.model_validate_json(response.text)
+
+            # If an analytics thread was paused and LLM determined the user answered it
+            if focus.active_analytics_thread_id and decision.resume_pending_thread:
+                return {
+                    "decision": SupervisorDecision(
+                        route="run_deep_financial_analysis",
+                        reasoning="Reanudando flujo analítico pausado con respuesta de texto del usuario.",
+                        resolved_query=user_msg,
+                        knowledge_domain=focus.last_domain if focus.last_domain in ("building", "unit", "cross_domain") else None,
+                        unit_code=user_context.unit_code if user_context.role == "resident" else focus.last_unit,
+                        period_date=focus.last_period,
+                        resume_pending_thread=True,
+                    )
+                }
+
             if not decision.period_date:
                 decision.period_date = _extract_period_from_text(user_msg, focus)
             if not decision.resolved_query:
@@ -396,12 +893,28 @@ def supervisor_router_node(
             # Guard: never allow LLM to return direct_response greeting for a non-greeting query
             if decision.route == "direct_response":
                 return {"decision": heuristic_decision}
+
+            decision = _apply_entity_and_scope_guards(decision, user_msg, user_context, focus)
             return {"decision": decision}
         except Exception as exc:
             logger.warning(
                 "Supervisor LLM routing failed (%s); falling back to deterministic classifier.",
                 exc,
             )
+
+    # 5. Offline / Fallback handling when an analytics thread is paused and user typed free text
+    if focus.active_analytics_thread_id and _looks_like_analytics_clarification_answer(user_msg):
+        return {
+            "decision": SupervisorDecision(
+                route="run_deep_financial_analysis",
+                reasoning="Reanudando flujo analítico pausado con respuesta del usuario.",
+                resolved_query=user_msg,
+                knowledge_domain=focus.last_domain if focus.last_domain in ("building", "unit", "cross_domain") else None,
+                unit_code=user_context.unit_code if user_context.role == "resident" else focus.last_unit,
+                period_date=focus.last_period,
+                resume_pending_thread=True,
+            )
+        }
 
     return {"decision": heuristic_decision}
 
@@ -412,7 +925,7 @@ def execute_tool_node(
     workflow_fn: Callable[..., Any] | None = None,
     status_callback: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
-    """Execute the selected RBAC-enforced tool and build SupervisorTurnResult."""
+    """Execute the selected RBAC-enforced tool or Supervisor clarification and build SupervisorTurnResult."""
     decision = state["decision"]
     assert decision is not None
     user_context = state["user_context"]
@@ -422,14 +935,57 @@ def execute_tool_node(
 
     route: SupervisorRoute = decision.route
 
-    if route == "lookup_unit_bill":
+    # If user did not resume an active thread, clear stale pending state before executing new tool
+    if route != "clarify_intent" and not decision.resume_pending_thread:
+        focus.active_analytics_thread_id = None
+        focus.pending_clarification_query = None
+        focus.pending_clarification_route = None
+
+    if route == "clarify_intent":
+        if status_callback:
+            status_callback("Preparando opciones de consulta...")
+        prompt = (
+            decision.clarification_prompt
+            or "Para darte una respuesta precisa, por favor confirma el alcance de tu consulta."
+        )
+        # Preserve original pending query if this is a second-step clarification (e.g. Admin clicking 'Consultar un depto específico')
+        if not focus.pending_clarification_query or not decision.resume_pending_thread:
+            focus.pending_clarification_query = decision.resolved_query or user_msg
+            focus.pending_clarification_route = (
+                "run_deep_financial_analysis"
+                if _is_causal_or_trend_query(focus.pending_clarification_query)
+                else "lookup_unit_bill"
+            )
+        if decision.period_date:
+            focus.last_period = decision.period_date
+
+        tool_out = {
+            "summary": prompt,
+            "needs_clarification": True,
+            "clarification_prompt": prompt,
+            "candidate_options": list(decision.candidate_options or []),
+        }
+        turn_result = SupervisorTurnResult(
+            reply=prompt,
+            route="clarify_intent",
+            step_name="Aclaración requerida",
+            step_detail="Esperando confirmación de alcance o departamento.",
+            needs_clarification=True,
+            clarification_prompt=prompt,
+            candidate_options=list(decision.candidate_options or []),
+            focus=focus,
+        )
+
+    elif route == "lookup_unit_bill":
         if status_callback:
             status_callback("Consultando el estado de cuenta de la unidad...")
+        focus.pending_clarification_query = None
+        focus.pending_clarification_route = None
         tool_out = lookup_unit_bill(
             user_context=user_context,
             unit_code=decision.unit_code,
             period_date=decision.period_date,
-            query_text=user_msg,
+            query_text=decision.resolved_query or user_msg,
             client=http_client,
         )
         if not tool_out.get("error"):
@@ -449,6 +1005,8 @@ def execute_tool_node(
     elif route == "lookup_building_summary":
         if status_callback:
             status_callback("Consultando el resumen de gastos del edificio...")
+        focus.pending_clarification_query = None
+        focus.pending_clarification_route = None
         tool_out = lookup_building_summary(
             user_context=user_context,
             period_date=decision.period_date,
@@ -457,6 +1015,7 @@ def execute_tool_node(
         if not tool_out.get("error"):
             focus.last_domain = "building"
             focus.last_route = "lookup_building_summary"
+            focus.last_unit = None
             focus.last_period = tool_out.get("period_date") or decision.period_date
 
         turn_result = SupervisorTurnResult(
@@ -470,6 +1029,8 @@ def execute_tool_node(
     elif route == "check_system_status":
         if status_callback:
             status_callback("Verificando los períodos cargados en el sistema...")
+        focus.pending_clarification_query = None
+        focus.pending_clarification_route = None
         tool_out = check_system_status(
             user_context=user_context,
             client=http_client,
@@ -487,19 +1048,33 @@ def execute_tool_node(
         )
 
     elif route == "run_deep_financial_analysis":
-        active_thread = focus.active_analytics_thread_id if clarification_choice else None
+        focus.pending_clarification_query = None
+        focus.pending_clarification_route = None
+        is_analytics_resume = bool(
+            focus.active_analytics_thread_id
+            and (clarification_choice or decision.resume_pending_thread)
+        )
+        active_thread = focus.active_analytics_thread_id if is_analytics_resume else None
+        effective_resume_choice = (
+            (clarification_choice or user_msg) if is_analytics_resume else None
+        )
+
         tool_out = run_deep_financial_analysis(
             user_context=user_context,
             query=decision.resolved_query or user_msg,
             unit_code=decision.unit_code,
+            knowledge_domain=decision.knowledge_domain,
             thread_id=active_thread,
-            resume_choice=clarification_choice,
+            resume_choice=effective_resume_choice,
             workflow_fn=workflow_fn,
             status_callback=status_callback,
         )
         focus.last_route = "run_deep_financial_analysis"
         effective_tool_unit = tool_out.get("unit_code")
-        if effective_tool_unit:
+        if decision.knowledge_domain == "cross_domain":
+            focus.last_domain = "cross_domain"
+            focus.last_unit = effective_tool_unit or decision.unit_code
+        elif effective_tool_unit:
             focus.last_domain = "unit"
             focus.last_unit = effective_tool_unit
         else:

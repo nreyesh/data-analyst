@@ -66,3 +66,32 @@ def test_planner_preserves_cross_domain_when_explicitly_requested():
 
     assert plan.knowledge_domain == "cross_domain"
     assert len(plan.sub_analyses) == 2
+
+
+def test_planner_honors_pre_verified_cross_domain_from_supervisor():
+    """Verify planner_node honors knowledge_domain='cross_domain' passed by the Supervisor even when LLM returns 1 sub-analysis."""
+    mock_client = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.text = IntentPlan(
+        is_authorized_query=True,
+        knowledge_domain="unit",
+        analysis_goal="Analizar alza de gasto común en unidad B-504",
+        sub_analyses=["Variación mensual de la unidad B-504"],
+        target_unit="B-504",
+        unit_tower="B",
+        unit_number=504,
+    ).model_dump_json()
+    mock_client.models.generate_content.return_value = mock_resp
+
+    state: DataAnalystState = {
+        "user_query": "¿Por qué subió el gasto común este año? (Analizar impacto del edificio en la unidad B-504)",
+        "target_unit": "B-504",
+        "knowledge_domain": "cross_domain",
+    }
+    result = planner_node(state, client=mock_client)
+    plan = result["intent_plan"]
+
+    assert plan.knowledge_domain == "cross_domain"
+    assert plan.target_unit == "B-504"
+    assert len(plan.sub_analyses) == 2
+

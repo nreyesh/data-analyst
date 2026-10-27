@@ -122,9 +122,12 @@ def planner_node(state: DataAnalystState, client: genai.Client | None = None) ->
 
     user_choice = state.get("user_clarification_choice")
     pre_target_unit = state.get("target_unit")
+    pre_domain = state.get("knowledge_domain")
     query_context = f"User Query: {state['user_query']}"
     if pre_target_unit:
         query_context += f"\nTarget Unit Context: {pre_target_unit}"
+    if pre_domain:
+        query_context += f"\nPre-Verified Knowledge Domain: {pre_domain}"
     if user_choice:
         query_context += f"\nUser Clarification / Selected Focus: {user_choice}"
 
@@ -138,7 +141,14 @@ def planner_node(state: DataAnalystState, client: genai.Client | None = None) ->
 
     plan = IntentPlan.model_validate_json(response.text)
 
-    if pre_target_unit and not plan.target_unit:
+    if pre_domain in ("building", "unit", "cross_domain"):
+        plan.knowledge_domain = pre_domain
+        if pre_domain == "building":
+            plan.target_unit = None
+            plan.unit_tower = None
+            plan.unit_number = None
+
+    if pre_target_unit and not plan.target_unit and pre_domain != "building":
         is_macro_only = bool(
             re.search(
                 r"\b(total del edificio|gasto operacional del edificio|edificio completo)\b",
@@ -146,7 +156,7 @@ def planner_node(state: DataAnalystState, client: genai.Client | None = None) ->
                 re.I,
             )
         ) and not bool(re.search(r"\b(mi|mio|mío|depto|departamento|unidad)\b", state.get("user_query", ""), re.I))
-        if not is_macro_only:
+        if not is_macro_only or pre_domain in ("unit", "cross_domain"):
             plan.target_unit = pre_target_unit
 
     # Resolve tower from user clarification choice if available
@@ -181,7 +191,7 @@ def planner_node(state: DataAnalystState, client: genai.Client | None = None) ->
             elif m_depto_num:
                 plan.unit_number = plan.unit_number or int(m_depto_num.group(1))
 
-    # Granularity Guard: Reject tower-only requests without unit number
+    # Granularity Guard: Reject tower-only requests without unit number (defensive fallback when invoked via CLI)
     if m_tower_only and not m_depto_num and not m3 and not m4 and not m2 and not m1 and not plan.unit_number:
         if re.search(r"\b(gasto|cobro|evolucion|consumo|total).*\btorre\s+([A-Za-z]+)\b", raw_text, re.I):
             plan.needs_clarification = True
@@ -192,7 +202,7 @@ def planner_node(state: DataAnalystState, client: genai.Client | None = None) ->
             )
             plan.candidate_options = []
 
-    # Dynamic DB-backed clarification if unit_number is present but tower is missing
+    # Dynamic DB-backed clarification if unit_number is present but tower is missing (when not pre-resolved by Supervisor)
     if plan.unit_number and not plan.unit_tower and not user_choice:
         plan.knowledge_domain = "unit"
         towers: list[str] = []
@@ -213,14 +223,24 @@ def planner_node(state: DataAnalystState, client: genai.Client | None = None) ->
     # Canonicalize target_unit when both are present and enforce Unit-First Focus Guard
     if plan.unit_tower and plan.unit_number:
         plan.target_unit = f"{plan.unit_tower.upper().strip()}-{plan.unit_number}"
-        is_explicit_building_inquiry = bool(
-            re.search(
-                r"\b(edificio|macro|caldera|compara.*edificio|en relacion al edificio|respecto al edificio)\b",
-                raw_text,
-                re.I,
+        is_explicit_building_inquiry = (
+            pre_domain == "cross_domain"
+            or bool(
+                re.search(
+                    r"\b(edificio|macro|caldera|compara.*edificio|en relacion al edificio|respecto al edificio|impacto del edificio)\b",
+                    raw_text,
+                    re.I,
+                )
             )
         )
-        if not is_explicit_building_inquiry:
+        if pre_domain == "cross_domain":
+            plan.knowledge_domain = "cross_domain"
+            if len(plan.sub_analyses) < 2:
+                plan.sub_analyses = [
+                    f"Desglose y variación de componentes de la boleta de la unidad {plan.target_unit} (MoM)",
+                    "Atribución de causas macro en el gasto general y caldera del edificio",
+                ]
+        elif not is_explicit_building_inquiry:
             plan.knowledge_domain = "unit"
             if len(plan.sub_analyses) > 1:
                 unit_subs = [

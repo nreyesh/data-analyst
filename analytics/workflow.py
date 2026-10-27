@@ -331,6 +331,7 @@ def run_analysis(
     thread_id: str | None = None,
     resume_choice: str | None = None,
     target_unit: str | None = None,
+    knowledge_domain: Literal["building", "unit", "cross_domain"] | None = None,
     status_callback: Callable[[str], None] | None = None,
 ) -> AnalyticsResult:
     """Execute end-to-end analytical question answering, supporting checkpointed clarification pause/resume.
@@ -342,6 +343,7 @@ def run_analysis(
         thread_id: Optional session thread identifier for stateful pause/resume.
         resume_choice: User's clarification choice when resuming a paused thread.
         target_unit: Optional pre-verified apartment unit code (e.g. 'B-504').
+        knowledge_domain: Optional pre-verified domain scope ('building', 'unit', or 'cross_domain').
         status_callback: Optional callback invoked with human-friendly Spanish status strings at each stage.
 
     Returns:
@@ -372,6 +374,7 @@ def run_analysis(
             "messages": [],
             "user_query": query,
             "target_unit": target_unit,
+            "knowledge_domain": knowledge_domain,
             "intent_plan": None,
             "macro_trajectory": None,
             "trajectory_evaluation": None,

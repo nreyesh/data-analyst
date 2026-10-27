@@ -424,16 +424,15 @@ async def on_message(
 
     runner = supervisor_runner or run_supervisor_turn
 
-    # If an analytics thread is paused awaiting clarification and user typed free text
-    clarification_choice = user_text if focus.active_analytics_thread_id else None
-
+    # Pass clarification_choice=None on free-text messages so supervisor_router_node
+    # evaluates whether the text answers a pending clarification or switches topics.
     turn_result, updated_messages, updated_focus = await _execute_turn_with_live_step(
         runner=runner,
         user_message=user_text,
         user_context=user_ctx,
         messages=prior_messages,
         focus=focus,
-        clarification_choice=clarification_choice,
+        clarification_choice=None,
     )
 
     cl.user_session.set("messages", updated_messages)

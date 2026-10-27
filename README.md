@@ -8,7 +8,7 @@ This repository implements **Phase 1**, **Phase 2**, **Phase 3**, and **Phase 4*
 * **Phase 1 (Dual-Domain PDF Extractors, Cross-Validation & Input Watcher)**: Dedicated LangGraph state machines utilizing Google Gemini multimodal vision for both `general` building reports (3-tier integer validation: `operational_total`, `fondos_total`, `grand_total`) and `unit` apartment bills (5-point deterministic integer validation: concepts table sum, hot water & heating utility cross-checks, unit charges sum, and `total_to_pay_amount` balance check), self-healing error correction loops, and zero-cost folder-routed batch/watch processing (`data/input/general/` and `data/input/unit/`).
 * **Phase 2 (Storage Layer & Domain-Partitioned Spool Sync)**: Persistent FastAPI backend service and normalized 3NF SQLite database (`expenses.db`) storing building-wide reports (`expense_reports`, `expense_sections`, `expense_items`) alongside a 4-table unit billing schema (`unit_bills`, `unit_bill_concepts`, `unit_bill_consumptions`, `unit_bill_charges`) linked via `period_date` (`YYYY-MM-01`), with UUIDv7 primary keys, atomic duplicate overwrites (upserts), and resilient domain-partitioned cloud spooling (`data/output/{general,unit}/`).
 * **Phase 3 (Analytics & Plotting Engine with Unit Intelligence)**: Autonomous LangGraph SQL-and-Matplotlib analytical agent featuring multi-analysis orchestration (1–3 SQL queries per request for MoM, YoY, and category variance), mandatory `[Mes Año]` period citations, a two-hop variance analysis loop, 3-layer schema privacy defense, strict HTTP-only Data Gateway isolation (whitelisting both building-wide and unit-level tables with zero direct DB access), an offline circuit breaker, and **Unit-Level Expense Intelligence** (a <15ms fast-path REST tool `get_unit_bill_details`, a dynamic modular knowledge base cutting prompt token overhead by ~50%, two-part causal decomposition bridging unit bills with building-wide cost drivers, and recipe-driven Matplotlib charting for stacked component evolutions and dual-axis utility tariffs).
-* **Phase 4 (Conversational Supervisor Agent & Ephemeral Chainlit Web UI)**: Top-level LangGraph Conversational Supervisor (`agent/`) using the Tool-Calling Concierge pattern (`lookup_unit_bill`, `lookup_building_summary`, `run_deep_financial_analysis`, `check_system_status`) with ephemeral in-RAM multi-turn memory (8-message rolling window + `FocusContext` anaphora resolution), deterministic Python-level Role-Based Access Control (`admin` vs `resident` bound to `unit_code`), and an interactive **Chainlit Web Interface** (`frontend/`) featuring Firebase Auth (with offline dev fallback), clickable `cl.Action` clarification buttons, collapsible `cl.Step` transparency, and inline `cl.Image` chart rendering.
+* **Phase 4 (Conversational Supervisor Agent & Ephemeral Chainlit Web UI)**: Top-level LangGraph Conversational Supervisor (`agent/`) using **LLM-first semantic routing** (`SupervisorDecision` via Google Gemini with deterministic offline fallback) and **Upfront Intent & Scope Clarification (`clarify_intent`)** across fast-path and analytical tools (`lookup_unit_bill`, `lookup_building_summary`, `run_deep_financial_analysis`, `check_system_status`). Features Turn 1 Building vs. Unit scope disambiguation (3 options for `resident`, 2 options for `admin`), Turn 2+ sticky entity inheritance via `FocusContext` (`last_domain`, `last_unit`, `last_period`, `last_route`), centralized DB-backed missing-tower resolution (`Torre A` vs `Torre B`), conversational unit-code prompting for administrators, seamless coordination with Phase 3 Hop 1 trajectory verification (including topic-switching escape hatches), deterministic Python-level Role-Based Access Control (`admin` vs `resident` bound to `unit_code`), and an interactive **Chainlit Web Interface** (`frontend/`) with Firebase Auth, clickable `cl.AskActionMessage` clarification buttons, live `cl.Step` progress updates, and inline `cl.Image` chart rendering.
 
 ---
 
@@ -45,10 +45,11 @@ This repository implements **Phase 1**, **Phase 2**, **Phase 3**, and **Phase 4*
 ┌───────────────────────┐                                   ┌──────────┴────────────┐
 │        PHASE 4        │  WebSocket (Ephemeral RAM)        │        PHASE 4        │
 │   Chainlit Web UI     │◀─────────────────────────────────▶│Supervisor Orchestrator│
-│  • Firebase/Dev Auth  │                                   │  • Role Enforcement   │
-│  • cl.Action Buttons  │                                   │    (Admin vs Resident)│
-│  • cl.Step & cl.Image │                                   │  • Focus Anaphora     │
-└───────────────────────┘                                   └───────────────────────┘
+│  • Firebase/Dev Auth  │                                   │  • LLM-First Router   │
+│  • cl.Action Buttons  │                                   │  • Upfront Clarifier  │
+│  • cl.Step & cl.Image │                                   │    (Building vs Unit) │
+└───────────────────────┘                                   │  • Focus & RBAC Gate  │
+                                                            └───────────────────────┘
 ```
 
 ---
@@ -286,14 +287,21 @@ Open **[http://localhost:8501](http://localhost:8501)** in your browser:
      - **Resident Profile (B-504)**: `residente504b@condominio.cl` / `residente123` (`role="resident"`, `unit_code="B-504"`) — automatically bound to apartment `B-504` at the Python tool execution layer (immune to prompt-injection privilege escalation) plus public building-wide totals.
      - **Resident Profile (A-102)**: `residente102a@condominio.cl` / `residente123` (`role="resident"`, `unit_code="A-102"`).
 
-2. **Ephemeral Multi-Turn Chat & Interactive Features**:
-   - **Zero Long-Term Storage**: Conversation history (`MAX_EPHEMERAL_MESSAGES=8`) and sticky entity context (`FocusContext`: `last_period`, `last_unit`, `last_route`) live strictly in volatile RAM during the active WebSocket session and are wiped when the tab closes.
-   - **Fast-Path vs. Deep Analytics Dispatch**:
-     - Single-period unit questions (*"¿Cuánto debo pagar este mes?"*) route to `lookup_unit_bill` (<15ms, 0 tokens).
-     - Single-period building questions (*"¿Cuál fue el gasto común total del edificio en septiembre 2026?"*) and follow-ups (*"¿Y el mes anterior?"*) route to `lookup_building_summary` (<15ms, 0 tokens).
-     - Time-series trends, variance drivers, and causal questions (*"¿Cómo ha evolucionado mi gasto?"*, *"¿Por qué subió en agosto?"*) route to `run_deep_financial_analysis`, rendering Matplotlib charts once via native `cl.Image(display="inline", size="large")` (with automatic sanitization of raw `![...](...)` markdown image links to prevent broken 404 placeholders).
+2. **Ephemeral Multi-Turn Chat, Upfront Clarification & Interactive Features**:
+   - **Zero Long-Term Storage**: Conversation history (`MAX_EPHEMERAL_MESSAGES=8`) and sticky entity context (`FocusContext`: `last_domain`, `last_period`, `last_unit`, `last_route`, `active_analytics_thread_id`, `pending_clarification_query`) live strictly in volatile RAM during the active WebSocket session and are wiped when the tab closes.
+   - **LLM-First Semantic Routing & Fast-Path vs. Deep Analytics Dispatch**:
+     - The Supervisor evaluates every turn with Gemini structured output (`SupervisorDecision`) first (falling back to deterministic heuristics only when offline).
+     - Unambiguous single-period unit questions (*"¿Cuánto debo pagar este mes?"*) route to `lookup_unit_bill` (<15ms).
+     - Unambiguous single-period building questions (*"¿Cuál fue el gasto común total del edificio en septiembre 2026?"*) and follow-ups (*"¿Y el mes anterior?"*) route to `lookup_building_summary` (<15ms).
+     - Time-series trends, variance drivers, and causal questions (*"¿Cómo ha evolucionado mi gasto?"*, *"¿Por qué subió el gasto del edificio en agosto?"*) route to `run_deep_financial_analysis` with pre-verified `knowledge_domain` (`"building"`, `"unit"`, or `"cross_domain"`) and `target_unit`, rendering Matplotlib charts via native `cl.Image(display="inline", size="large")`.
+   - **Two-Tier Interactive Clarification (`clarify_intent` + Hop 1 Trend Verification)**:
+     - **Turn 1 Scope Disambiguation (Supervisor)**: When `FocusContext.last_domain` is empty (cold start) and a question about expenses, variations, or evolution does not specify *building* vs. *apartment unit*:
+       - **Resident (`B-504`)** is presented with 3 clickable buttons via `cl.AskActionMessage`: `Mi departamento (B-504)`, `Gasto general del edificio`, and `Ambos (impacto del edificio en mi unidad B-504)` (`cross_domain`).
+       - **Admin** is presented with 2 clickable buttons: `Gasto general del edificio` and `Consultar un departamento específico` (which then prompts the admin conversationally to type the unit code, e.g., `B-504`).
+     - **Turn 2+ Focus Inheritance**: Subsequent follow-up questions automatically inherit `last_domain`, `last_unit`, and `last_period` from `FocusContext` without re-asking for clarification.
+     - **Centralized Unit & Tower Disambiguation (Supervisor)**: Queries mentioning a bare apartment number without a tower (e.g., *"depto 504"*) trigger a dynamic DB lookup (`SELECT DISTINCT tower FROM unit_bills WHERE unit_number = 504`) and render clickable tower buttons (`Torre A (A-504)`, `Torre B (B-504)`) for both fast-path and deep analytics routes. Tower-only queries (*"gastos de la torre B"*) are intercepted by the Granularity Guard.
+     - **Hop 1 Trend Verification & Escape Hatch (Analytics -> Supervisor)**: Once inside `run_deep_financial_analysis`, Hop 1 (`trajectory_inspector_node` + `trajectory_evaluator_node`) verifies the user's premise against actual SQLite monthly totals and pauses via `interrupt()` if the data contradicts the premise. On the next turn, if the user clicks a trend button (or replies to the prompt), the Supervisor resumes the paused `active_analytics_thread_id` directly into `sql_coder_node`; if the user ignores the buttons and types an unrelated question, the Supervisor automatically cancels the paused thread and routes the new question.
    - **Live Progress Indicator & Role-Aware Step Details**: While a query or clarification resumption executes, a single `cl.Step` updates its title in real time with human-friendly Spanish stage labels (*"Analizando tu consulta..."* $\rightarrow$ *"Revisando el historial mensual de gastos..."* $\rightarrow$ *"Preparando el gráfico comparativo..."* $\rightarrow$ *"Ajustando el formato del gráfico..."* $\rightarrow$ *"Redactando el informe y conclusiones..."*). Expanding the completed step shows full SQL/REST telemetry for `admin` users and a non-technical verification summary for `resident` users (enforcing Zero Schema Exposure).
-   - **Interactive Clarification Buttons**: When a query is ambiguous (e.g., an admin asking *"¿Cuánto debe el depto 504?"* across multiple towers, or multi-phase variance inflection points), Chainlit renders bordered outline buttons via `cl.AskActionMessage`, preserves the trajectory explanation alongside the selected choice, and automatically resumes the paused LangGraph `MemorySaver` checkpoint (`JsonPlusSerializer` with registered state models) on click.
 
 3. **Programmatic Python Invocation (Without Web UI)**:
    ```bash
@@ -310,10 +318,10 @@ Open **[http://localhost:8501](http://localhost:8501)** in your browser:
 
 ## 🧪 Running the Test Suite
 
-The test suite contains 139 offline automated tests (covering Phase 1 `general` and `unit` extraction/validation/input watcher, Phase 2 persistence/spooling across both domains, Phase 3 analytics/multi-query/isolation/unit intelligence, and Phase 4 conversational supervisor routing, deterministic tenant RBAC, and Chainlit handlers) that execute in seconds without calling the live Gemini API:
+The test suite contains 145 offline automated tests (covering Phase 1 `general` and `unit` extraction/validation/input watcher, Phase 2 persistence/spooling across both domains, Phase 3 analytics/multi-query/isolation/unit intelligence, and Phase 4 LLM-first conversational supervisor routing, upfront scope/entity clarification, deterministic tenant RBAC, and Chainlit handlers) that execute in seconds without calling the live Gemini API:
 
 ```bash
-# Run all 139 tests
+# Run all 145 tests
 python -m pytest -v
 
 # Run Phase 1, Phase 3 & Phase 4 workflow/unit/supervisor tests
