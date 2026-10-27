@@ -24,10 +24,10 @@ Header table containing monthly unit statement summaries.
 | `alicuota_total` | FLOAT | NOT NULL | Prorate percentage e.g. `0.16736` (meaning `0.16736%`). |
 | `last_payment_date` | VARCHAR(10) | NULLABLE | ISO date `'YYYY-MM-DD'` of last payment. |
 | `last_payment_amount` | INTEGER | NULLABLE | Last payment amount in CLP. |
-| `calculated_dept_subtotal` | INTEGER | NOT NULL | Subtotal Conceptos Departamento in CLP. |
-| `calculated_consumo_total` | INTEGER | NOT NULL | Subtotal Consumos Generales in CLP. |
-| `calculated_unit_subtotal` | INTEGER | NOT NULL | Subtotal Gastos por Unidad in CLP. |
-| `calculated_total_month` | INTEGER | NOT NULL | Total monthly charge in CLP. |
+| `calculated_dept_subtotal` | INTEGER | NOT NULL | **Subtotal Depto (Cuota Base + Fondos)** in CLP. |
+| `calculated_consumo_total` | INTEGER | NOT NULL | **Agua Caliente** in CLP. |
+| `calculated_unit_subtotal` | INTEGER | NOT NULL | **Cargos Particulares (Multas y otros)** in CLP. |
+| `calculated_total_month` | INTEGER | NOT NULL | **Total Cobrado en el Mes** in CLP. |
 
 ### Table: `unit_bill_concepts`
 Breakdown rows in "Tabla Conceptos" (Base prorating and individual fund quotas).

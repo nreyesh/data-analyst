@@ -2,7 +2,7 @@
 
 ## 1. Dual Expense Classification (`operational` vs. `fondos`)
 * **Gasto Común Operacional (`operational`)**: Ordinary operating expenses of the condominium (staff payroll, utilities, maintenance, repairs, insurance, supplies, etc.) corresponding to `TOTAL GASTOS COMUNES`.
-* **Fondos y Recargos (`fondos`)**: Reserve funds and special surcharges (`Fondo de Reserva 5%`, `Fondo Impermeabilizacion`, etc.) added after `TOTAL GASTOS COMUNES`.
+* **Fondos y Recargos (`fondos`)**: Reserve funds and special surcharges (`Fondo de Reserva 5%`, etc.) added after `TOTAL GASTOS COMUNES`.
 * **Total General Cobrado (`calculated_grand_total`)**: The sum of operational expenses plus reserve funds (`operational_total + fondos_total`), corresponding to final total billed.
 
 ## 2. Table Specifications

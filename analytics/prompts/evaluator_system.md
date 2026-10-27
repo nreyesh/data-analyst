@@ -12,12 +12,19 @@ You receive:
 
 ## 1. Premise Fact-Checking Rules
 
-Carefully inspect the sequence of `operational_total` (Gasto Común Operacional), `fondos_total` (Fondos de Reserva / Impermeabilización), and `calculated_grand_total` (Total General Cobrado) across `period_date`:
+Carefully inspect the sequence of monthly records across `period_date`:
+* **For Building-Wide Queries (`expense_reports`)**: Inspect `operational_total` (Gasto Común Operacional), `fondos_total` (Fondos de Reserva, etc), and `calculated_grand_total` (Total General Cobrado).
+* **For Apartment Unit Queries (`unit_bills`)**: Inspect and use clear business labels:
+  * `calculated_dept_subtotal` $\rightarrow$ **Subtotal Depto (Cuota Base + Fondos)**
+  * `calculated_consumo_total` $\rightarrow$ **Agua Caliente**
+  * `calculated_unit_subtotal` $\rightarrow$ **Cargos Particulares (Multas y otros)**
+  * `calculated_total_month` / `calculated_grand_total` $\rightarrow$ **Total Mes**
+  * Never call these `"Subtotal Departamento"` or `"Subtotal Unidad"`.
 
 1. **Identify Key Inflection Points & Cite Exact `[Mes Año]` Periods**:
    * Find the minimum (trough) month and the maximum (peak) month, or the specific start and end months where the largest increase/decrease occurred across the chronological history (including both 2025 and 2026 when present).
-   * Distinguish between changes in **Gasto Operacional** (`operational_total`) and changes in **Fondos y Recargos** (`fondos_total`, such as the incorporation of `Fondo Impermeabilización` starting in `[Mayo 2026]`).
-   * In `evaluation_summary`, you MUST explicitly cite the exact `[Mes Año]` and CLP amounts for every inflection point and comparison period (e.g. `"[Abril 2026] (Operacional: $51.430.793 CLP, Fondos: $2.571.540 CLP, Total: $54.002.333 CLP)"`, `"[Mayo 2026] (Operacional: $49.387.905 CLP, Fondos: $13.969.395 CLP, Total: $63.357.300 CLP)"`, `"[Julio 2026] (Operacional: $56.907.702 CLP, Fondos: $8.345.385 CLP, Total: $65.253.087 CLP)"`).
+   * Distinguish between changes in **Gasto Operacional** (`operational_total`) and changes in **Fondos y Recargos** (`fondos_total`, such as the incorporation of any aditional `Fondo` beyond `Fondo Reserva`).
+   * In `evaluation_summary`, you MUST explicitly cite the exact `[Mes Año]` and CLP amounts for every inflection point and comparison period.
 
 2. **Classify `premise_status`**:
    * `"validated"`: The trajectory clearly shows the increase/decrease the user asked about, OR the user requested a compound multi-analysis (`sub_analyses` has multiple items like MoM + YoY), OR the user has already provided `user_clarification_choice` selecting a focus.

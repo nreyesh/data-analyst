@@ -6,8 +6,9 @@ import logging
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 from langsmith import traceable
@@ -29,7 +30,15 @@ from analytics.state import AnalyticsResult, DataAnalystState
 logger = logging.getLogger("analytics.workflow")
 
 # Shared in-memory checkpointer for stateful pause/resume across turns
-_DEFAULT_CHECKPOINTER = MemorySaver()
+_DEFAULT_CHECKPOINTER = MemorySaver(
+    serde=JsonPlusSerializer(
+        allowed_msgpack_modules=[
+            ("analytics.state", "IntentPlan"),
+            ("analytics.state", "TrajectoryEvaluation"),
+            ("analytics.state", "SQLSubQuery"),
+        ]
+    )
+)
 
 
 # ============================================================================
@@ -239,6 +248,81 @@ def build_analytics_graph(checkpointer: MemorySaver | None = None):
 # ============================================================================
 
 
+def _emit_analytics_node_status(
+    node_name: str,
+    node_output: dict[str, Any],
+    accumulated_state: dict[str, Any],
+    status_callback: Callable[[str], None] | None,
+) -> None:
+    """Emit human-friendly, non-technical Spanish progress updates after each LangGraph node."""
+    if status_callback is None:
+        return
+
+    plan = node_output.get("intent_plan") or accumulated_state.get("intent_plan")
+    max_retries = accumulated_state.get("max_retries", 2)
+
+    if node_name == "planner":
+        if plan and not plan.is_authorized_query:
+            status_callback("Verificando políticas de acceso...")
+        elif plan and plan.needs_clarification and not accumulated_state.get("user_clarification_choice"):
+            status_callback("Preparando opciones de consulta...")
+        elif plan and (
+            plan.analysis_type in ("variance_driver", "comparative_cohort")
+            or len(plan.sub_analyses) > 1
+        ):
+            status_callback("Revisando el historial mensual de gastos...")
+        else:
+            status_callback("Extrayendo información financiera de los registros...")
+
+    elif node_name == "trajectory_inspector":
+        if node_output.get("gateway_unavailable"):
+            status_callback("Verificando disponibilidad del servicio de datos...")
+        else:
+            status_callback("Evaluando la evolución mensual del período...")
+
+    elif node_name == "trajectory_evaluator":
+        eval_res = node_output.get("trajectory_evaluation")
+        if eval_res and eval_res.needs_clarification and not accumulated_state.get("user_clarification_choice"):
+            status_callback("Preparando opciones de período a analizar...")
+        else:
+            status_callback("Extrayendo el desglose detallado de gastos...")
+
+    elif node_name == "clarification":
+        status_callback("Procesando la opción seleccionada...")
+
+    elif node_name == "sql_coder":
+        status_callback("Consultando los registros financieros de la comunidad...")
+
+    elif node_name == "sql_gateway":
+        if node_output.get("gateway_unavailable"):
+            status_callback("Verificando estado de conexión...")
+        elif node_output.get("sql_results") is None:
+            retry_count = node_output.get("retry_count", 0)
+            if retry_count < max_retries:
+                status_callback("Refinando la búsqueda de información financiera...")
+            else:
+                status_callback("Redactando el resumen del análisis...")
+        else:
+            results = node_output.get("sql_results") or []
+            if plan and plan.requires_visualization and len(results) > 0:
+                status_callback("Preparando el gráfico comparativo...")
+            else:
+                status_callback("Redactando el informe y conclusiones...")
+
+    elif node_name == "visualizer":
+        status_callback("Generando la visualización del gráfico...")
+
+    elif node_name == "sandbox_runner":
+        if not node_output.get("chart_file_path"):
+            retry_count = node_output.get("retry_count", 0)
+            if retry_count < max_retries:
+                status_callback("Ajustando el formato del gráfico...")
+            else:
+                status_callback("Redactando el informe y conclusiones...")
+        else:
+            status_callback("Redactando el informe y conclusiones...")
+
+
 @traceable(name="run_analytics_query")
 def run_analysis(
     query: str,
@@ -246,6 +330,8 @@ def run_analysis(
     max_retries: int | None = None,
     thread_id: str | None = None,
     resume_choice: str | None = None,
+    target_unit: str | None = None,
+    status_callback: Callable[[str], None] | None = None,
 ) -> AnalyticsResult:
     """Execute end-to-end analytical question answering, supporting checkpointed clarification pause/resume.
 
@@ -255,6 +341,8 @@ def run_analysis(
         max_retries: Maximum self-healing retry attempts (default: 2).
         thread_id: Optional session thread identifier for stateful pause/resume.
         resume_choice: User's clarification choice when resuming a paused thread.
+        target_unit: Optional pre-verified apartment unit code (e.g. 'B-504').
+        status_callback: Optional callback invoked with human-friendly Spanish status strings at each stage.
 
     Returns:
         AnalyticsResult with summary markdown, clarification payload (if paused), data, chart path, and telemetry.
@@ -274,14 +362,16 @@ def run_analysis(
     }
 
     if resume_choice is not None:
-        final_state = graph.invoke(
-            Command(resume=resume_choice),
-            config=run_config,
-        )
+        if status_callback:
+            status_callback("Procesando la opción seleccionada...")
+        stream_input: Any = Command(resume=resume_choice)
     else:
+        if status_callback:
+            status_callback("Planificando el análisis financiero...")
         initial_state: DataAnalystState = {
             "messages": [],
             "user_query": query,
+            "target_unit": target_unit,
             "intent_plan": None,
             "macro_trajectory": None,
             "trajectory_evaluation": None,
@@ -298,15 +388,31 @@ def run_analysis(
             "max_retries": retries,
             "error_history": [],
         }
-        final_state = graph.invoke(
-            initial_state,
-            config=run_config,
-        )
+        stream_input = initial_state
+
+    interrupts: Any = None
+    accumulated_state: dict[str, Any] = {"max_retries": retries}
+
+    for chunk in graph.stream(stream_input, config=run_config, stream_mode="updates"):
+        if "__interrupt__" in chunk:
+            interrupts = chunk["__interrupt__"]
+            continue
+        for node_name, node_output in chunk.items():
+            if isinstance(node_output, dict):
+                accumulated_state.update(node_output)
+                _emit_analytics_node_status(
+                    node_name=node_name,
+                    node_output=node_output,
+                    accumulated_state=accumulated_state,
+                    status_callback=status_callback,
+                )
+
+    snapshot = graph.get_state(run_config)
+    final_state: dict[str, Any] = dict(snapshot.values) if snapshot and snapshot.values else accumulated_state
 
     duration = round(time.perf_counter() - start_time, 2)
 
     # Check if graph execution paused via interrupt()
-    interrupts = final_state.get("__interrupt__")
     if interrupts:
         intr_payload = interrupts[0].value if hasattr(interrupts[0], "value") else interrupts[0]
         prompt = intr_payload.get("clarification_prompt", "Se requiere aclaración.")
@@ -341,3 +447,6 @@ def run_analysis(
         error_history=list(final_state.get("error_history", [])),
         latency_seconds=duration,
     )
+
+
+run_analytics_workflow = run_analysis

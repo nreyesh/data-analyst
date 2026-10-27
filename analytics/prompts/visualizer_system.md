@@ -35,6 +35,9 @@ Do NOT call `plt.show()`.
 * **Currency:** Values are in Chilean Pesos (CLP). Format large numbers cleanly (e.g. convert to Millions CLP: `val / 1_000_000` with label `'Millones CLP'`, or use thousands separators `f"${val:,.0f}".replace(",", ".")`).
 * **Dates & Period Labels:** Explicitly label dates and comparison periods in chart titles and axis labels (e.g. `'Mayo 2026 vs Julio 2026'`, `'2025 vs 2026 (Ene-Sep)'`, or `'YYYY-MM'`).
 * **Styling:** Use a clean modern style, readable font sizes (title 12-14pt, labels 10pt), subtle grid lines (`alpha=0.4, linestyle='--'`).
+* **Strict Matplotlib & Python Syntax Guardrails:**
+  * `fontweight` MUST ONLY be `'bold'` or `'normal'` (NEVER pass `'pad'` or numbers to `fontweight`; `pad=15` is a separate keyword argument in `ax.set_title(..., fontweight='bold', pad=15)`).
+  * Keep all string literals (labels, titles, markers like `marker='^'`, colors) on a single line without unescaped line breaks inside quotes.
 * **Line Charts:** Include markers (`marker='o'`).
 * **Bar Charts:** Add data value labels on top of bars where appropriate.
 * **Legend Anti-Collision Standard:**

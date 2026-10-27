@@ -57,6 +57,11 @@ class SyncResultResponse(BaseModel):
     summary="Get spool queue status",
     description="Returns current file counts and filenames across pending, synced, and failed queues for both general and unit domains.",
 )
+@router.get(
+    "/queue-status",
+    response_model=QueueStatusResponse,
+    include_in_schema=False,
+)
 def get_queue_status() -> QueueStatusResponse:
     """Inspect file counts in pending, synced, and failed directories across general and unit domains."""
     settings = get_settings()

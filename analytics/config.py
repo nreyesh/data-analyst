@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import tempfile
 from dotenv import load_dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -98,6 +99,16 @@ class AnalyticsSettings(BaseSettings):
         """Endpoint URL for unit bills REST resource."""
         return f"{self.backend_base_url.rstrip('/')}/api/v1/unit-bills"
 
+    @property
+    def reports_api_url(self) -> str:
+        """Endpoint URL for macro building expense reports REST resource."""
+        return f"{self.backend_base_url.rstrip('/')}/api/v1/reports"
+
+    @property
+    def sync_queue_status_url(self) -> str:
+        """Endpoint URL for spool queue status REST resource."""
+        return f"{self.backend_base_url.rstrip('/')}/api/v1/sync/status"
+
     # 5. Path Boundaries
     project_root: Path = Field(
         default_factory=lambda: Path(__file__).resolve().parent.parent
@@ -124,8 +135,8 @@ class AnalyticsSettings(BaseSettings):
 
     @property
     def scratch_dir(self) -> Path:
-        """Directory storing ephemeral script and data artifacts for sandboxing."""
-        return self.charts_dir / "scratch"
+        """Directory in OS temp storage for ephemeral sandbox script and dataset files."""
+        return Path(tempfile.gettempdir()) / "data_analyst_scratch"
 
     @property
     def data_dictionary_path(self) -> Path:

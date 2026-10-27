@@ -4,10 +4,11 @@ An autonomous, self-healing pipeline for extracting, validating, and persistentl
 * **`general` (*"Informe Gastos Comunes"*)**: Building-wide monthly operational and reserve fund expense reports.
 * **`unit` (*"Nota de Cobro"*)**: Individual apartment billing statements detailing unit proration (*alícuota*), billed concepts, metered utility readings (*agua caliente*, *calefacción*), and unit-specific charges/fines.
 
-This repository implements **Phase 1**, **Phase 2**, and **Phase 3** of the project roadmap:
+This repository implements **Phase 1**, **Phase 2**, **Phase 3**, and **Phase 4** of the project roadmap:
 * **Phase 1 (Dual-Domain PDF Extractors, Cross-Validation & Input Watcher)**: Dedicated LangGraph state machines utilizing Google Gemini multimodal vision for both `general` building reports (3-tier integer validation: `operational_total`, `fondos_total`, `grand_total`) and `unit` apartment bills (5-point deterministic integer validation: concepts table sum, hot water & heating utility cross-checks, unit charges sum, and `total_to_pay_amount` balance check), self-healing error correction loops, and zero-cost folder-routed batch/watch processing (`data/input/general/` and `data/input/unit/`).
 * **Phase 2 (Storage Layer & Domain-Partitioned Spool Sync)**: Persistent FastAPI backend service and normalized 3NF SQLite database (`expenses.db`) storing building-wide reports (`expense_reports`, `expense_sections`, `expense_items`) alongside a 4-table unit billing schema (`unit_bills`, `unit_bill_concepts`, `unit_bill_consumptions`, `unit_bill_charges`) linked via `period_date` (`YYYY-MM-01`), with UUIDv7 primary keys, atomic duplicate overwrites (upserts), and resilient domain-partitioned cloud spooling (`data/output/{general,unit}/`).
 * **Phase 3 (Analytics & Plotting Engine with Unit Intelligence)**: Autonomous LangGraph SQL-and-Matplotlib analytical agent featuring multi-analysis orchestration (1–3 SQL queries per request for MoM, YoY, and category variance), mandatory `[Mes Año]` period citations, a two-hop variance analysis loop, 3-layer schema privacy defense, strict HTTP-only Data Gateway isolation (whitelisting both building-wide and unit-level tables with zero direct DB access), an offline circuit breaker, and **Unit-Level Expense Intelligence** (a <15ms fast-path REST tool `get_unit_bill_details`, a dynamic modular knowledge base cutting prompt token overhead by ~50%, two-part causal decomposition bridging unit bills with building-wide cost drivers, and recipe-driven Matplotlib charting for stacked component evolutions and dual-axis utility tariffs).
+* **Phase 4 (Conversational Supervisor Agent & Ephemeral Chainlit Web UI)**: Top-level LangGraph Conversational Supervisor (`agent/`) using the Tool-Calling Concierge pattern (`lookup_unit_bill`, `lookup_building_summary`, `run_deep_financial_analysis`, `check_system_status`) with ephemeral in-RAM multi-turn memory (8-message rolling window + `FocusContext` anaphora resolution), deterministic Python-level Role-Based Access Control (`admin` vs `resident` bound to `unit_code`), and an interactive **Chainlit Web Interface** (`frontend/`) featuring Firebase Auth (with offline dev fallback), clickable `cl.Action` clarification buttons, collapsible `cl.Step` transparency, and inline `cl.Image` chart rendering.
 
 ---
 
@@ -19,7 +20,7 @@ This repository implements **Phase 1**, **Phase 2**, and **Phase 3** of the proj
 │  PDF Financial Docs   │    │       LangGraph Dual Extractors        │             │     FastAPI Backend     │
 │  • Single PDF CLI     │───▶│  • General: Operational vs. Fondos     │             │  • /api/v1/reports      │
 │    (--type general|   │    │    + 3-tier integer CLP validator      │             │  • /api/v1/unit-bills   │
-│     unit)             │    │  • Unit: Concepts, Metered Utilities   │             │  • Lifespan & Upserts   │
+│     unit)             │    │  • Unit: Concepts, Metered Utilities   │             │  • /api/v1/sync/status  │
 │  • data/input/ Watch  │    │    & Charges + 5-point CLP validator   │             └────────────┬────────────┘
 │    ├─ general/        │    └──────────────────┬─────────────────────┘                          │
 │    └─ unit/           │                       │                                                │
@@ -34,14 +35,20 @@ This repository implements **Phase 1**, **Phase 2**, and **Phase 3** of the proj
                                                             ┌───────────────────────┐
                                                             │        PHASE 3        │
                                                             │  Data Analyst Engine  │
-                                                            │  • Fast-Path REST Tool│
-                                                            │    (<15ms snapshot)   │
+                                                            │  • Fast-Path REST     │
+                                                            │    (Unit & Building)  │
                                                             │  • Dynamic Knowledge  │
-                                                            │    (Modular slices)   │
                                                             │  • Two-Hop Variance   │
-                                                            │  • Cross-Domain Bridge│
                                                             │  • Recipe A/B Sandbox │
-                                                            └───────────────────────┘
+                                                            └──────────▲────────────┘
+                                                                       │ Tool Dispatch + RBAC Gate
+┌───────────────────────┐                                   ┌──────────┴────────────┐
+│        PHASE 4        │  WebSocket (Ephemeral RAM)        │        PHASE 4        │
+│   Chainlit Web UI     │◀─────────────────────────────────▶│Supervisor Orchestrator│
+│  • Firebase/Dev Auth  │                                   │  • Role Enforcement   │
+│  • cl.Action Buttons  │                                   │    (Admin vs Resident)│
+│  • cl.Step & cl.Image │                                   │  • Focus Anaphora     │
+└───────────────────────┘                                   └───────────────────────┘
 ```
 
 ---
@@ -90,6 +97,12 @@ BACKEND_HOST=0.0.0.0
 BACKEND_PORT=8000
 BACKEND_BASE_URL=http://localhost:8000
 DATABASE_FILENAME=expenses.db
+
+# Phase 4: Chainlit & Authentication (Optional Firebase Auth / Local Dev Auth)
+CHAINLIT_AUTH_SECRET=replace_with_generated_chainlit_secret
+FIREBASE_API_KEY=                   # Leave empty for local dev accounts, or set Firebase Web API Key
+DEV_ADMIN_PASSWORD=admin123
+DEV_RESIDENT_PASSWORD=residente123
 ```
 
 ---
@@ -250,22 +263,67 @@ sqlite3 -header -column data/storage/expenses.db "SELECT charge_name, normalized
 
 ---
 
-## 🧪 Running the Test Suite
+### Step 5: Launch the Phase 4 Conversational Supervisor & Chainlit Web UI
 
-The test suite contains 114 offline automated tests (covering Phase 1 `general` and `unit` extraction/validation/input watcher, Phase 2 persistence/spooling across both domains, Phase 3 analytics/multi-query/isolation, and unit intelligence/fast-path tools) that execute in seconds without calling the live Gemini API:
+Ensure the FastAPI backend (`Step 1`) is running, then launch the interactive Chainlit web frontend:
 
 ```bash
-# Run all 114 tests
+# 1. Generate a Chainlit JWT signing secret (if not already set in .env)
+chainlit create-secret
+
+# 2. Launch the Chainlit web interface (default port 8501)
+#    Tip: Use --headless (and omit -w) so writing chart PNGs into data/output/charts/
+#    does not trigger mid-turn file-watcher reloads or X11 $DISPLAY warnings.
+chainlit run frontend/app.py --headless --port 8501
+```
+
+Open **[http://localhost:8501](http://localhost:8501)** in your browser:
+
+1. **Login & Role-Based Access Control (RBAC)**:
+   - **Firebase Mode**: If `FIREBASE_API_KEY` is configured in `.env`, credentials are verified against the Firebase Identity Toolkit REST API (`accounts:signInWithPassword`) and mapped to server-side claims (`role` and `unit_code`).
+   - **Local Development Mode** (when `FIREBASE_API_KEY` is empty): Sign in with the built-in server-side test profiles (or override via `DEV_USERS_JSON`):
+     - **Admin Profile**: `admin@condominio.cl` / `admin123` (`role="admin"`, `unit_code=None`) — unrestricted access to macro building totals, any apartment unit, multi-unit cohorts, and system diagnostics (`/api/v1/sync/status`).
+     - **Resident Profile (B-504)**: `residente504b@condominio.cl` / `residente123` (`role="resident"`, `unit_code="B-504"`) — automatically bound to apartment `B-504` at the Python tool execution layer (immune to prompt-injection privilege escalation) plus public building-wide totals.
+     - **Resident Profile (A-102)**: `residente102a@condominio.cl` / `residente123` (`role="resident"`, `unit_code="A-102"`).
+
+2. **Ephemeral Multi-Turn Chat & Interactive Features**:
+   - **Zero Long-Term Storage**: Conversation history (`MAX_EPHEMERAL_MESSAGES=8`) and sticky entity context (`FocusContext`: `last_period`, `last_unit`, `last_route`) live strictly in volatile RAM during the active WebSocket session and are wiped when the tab closes.
+   - **Fast-Path vs. Deep Analytics Dispatch**:
+     - Single-period unit questions (*"¿Cuánto debo pagar este mes?"*) route to `lookup_unit_bill` (<15ms, 0 tokens).
+     - Single-period building questions (*"¿Cuál fue el gasto común total del edificio en septiembre 2026?"*) and follow-ups (*"¿Y el mes anterior?"*) route to `lookup_building_summary` (<15ms, 0 tokens).
+     - Time-series trends, variance drivers, and causal questions (*"¿Cómo ha evolucionado mi gasto?"*, *"¿Por qué subió en agosto?"*) route to `run_deep_financial_analysis`, rendering Matplotlib charts once via native `cl.Image(display="inline", size="large")` (with automatic sanitization of raw `![...](...)` markdown image links to prevent broken 404 placeholders).
+   - **Live Progress Indicator & Role-Aware Step Details**: While a query or clarification resumption executes, a single `cl.Step` updates its title in real time with human-friendly Spanish stage labels (*"Analizando tu consulta..."* $\rightarrow$ *"Revisando el historial mensual de gastos..."* $\rightarrow$ *"Preparando el gráfico comparativo..."* $\rightarrow$ *"Ajustando el formato del gráfico..."* $\rightarrow$ *"Redactando el informe y conclusiones..."*). Expanding the completed step shows full SQL/REST telemetry for `admin` users and a non-technical verification summary for `resident` users (enforcing Zero Schema Exposure).
+   - **Interactive Clarification Buttons**: When a query is ambiguous (e.g., an admin asking *"¿Cuánto debe el depto 504?"* across multiple towers, or multi-phase variance inflection points), Chainlit renders bordered outline buttons via `cl.AskActionMessage`, preserves the trajectory explanation alongside the selected choice, and automatically resumes the paused LangGraph `MemorySaver` checkpoint (`JsonPlusSerializer` with registered state models) on click.
+
+3. **Programmatic Python Invocation (Without Web UI)**:
+   ```bash
+   python -c "
+   from agent import UserContext, run_supervisor_turn
+   ctx = UserContext(uid='u1', email='residente504b@condominio.cl', role='resident', unit_code='B-504')
+   turn, msgs, focus = run_supervisor_turn('¿Cuánto debo pagar en agosto 2026?', user_context=ctx)
+   print('Route:', turn.route)
+   print(turn.reply)
+   "
+   ```
+
+---
+
+## 🧪 Running the Test Suite
+
+The test suite contains 139 offline automated tests (covering Phase 1 `general` and `unit` extraction/validation/input watcher, Phase 2 persistence/spooling across both domains, Phase 3 analytics/multi-query/isolation/unit intelligence, and Phase 4 conversational supervisor routing, deterministic tenant RBAC, and Chainlit handlers) that execute in seconds without calling the live Gemini API:
+
+```bash
+# Run all 139 tests
 python -m pytest -v
 
-# Run Phase 1 & Phase 3 workflow/unit tests
+# Run Phase 1, Phase 3 & Phase 4 workflow/unit/supervisor tests
 python -m pytest tests/ -v
 
 # Run Phase 2 & Phase 3 backend/gateway tests
 python -m pytest backend/tests/ -v
 
 # Run with test coverage report
-python -m pytest --cov=data_extractor --cov=analytics --cov=backend/app -v
+python -m pytest --cov=data_extractor --cov=analytics --cov=agent --cov=frontend --cov=backend/app -v
 ```
 
 ---
@@ -297,6 +355,12 @@ python -m pytest --cov=data_extractor --cov=analytics --cov=backend/app -v
 data-analyst/
 ├── AGENTS.md                   # Architectural guidelines and engineering rules
 ├── README.md                   # Project documentation and quickstart
+├── agent/                      # Phase 4: Conversational Supervisor Agent & RBAC Orchestration
+│   ├── prompts/
+│   │   └── supervisor_system.md# Routing criteria, Chilean condo persona & anaphora instructions
+│   ├── state.py                # UserContext, FocusContext, SupervisorDecision & SupervisorState
+│   ├── supervisor.py           # LangGraph supervisor router, 8-message ephemeral window & tool execution
+│   └── tools.py                # Deterministic RBAC tool wrappers (unit, building, deep analytics, status)
 ├── analytics/                  # Phase 3: LangGraph Analytics & Plotting Engine with Unit Intelligence
 │   ├── cli.py                  # CLI entry point for natural language queries & charts
 │   ├── config.py               # Analytics settings & environment configuration
@@ -307,7 +371,7 @@ data-analyst/
 │   │   └── data_dictionary/   # Modular slices (core, building, unit, cross_domain)
 │   ├── sandbox.py              # Isolated headless subprocess runner for Matplotlib (Recipe A/B)
 │   ├── state.py                # TypedDict & Pydantic state/output contracts (unit & domain aware)
-│   ├── tools/                  # Fast-path tools (get_unit_bill_details <15ms snapshot)
+│   ├── tools/                  # Fast-path REST tools (unit_tools.py & building_tools.py <15ms snapshots)
 │   └── workflow.py             # LangGraph state machine, checkpointing & circuit breaker
 ├── backend/                    # Phase 2: Persistence & Data Gateway service
 │   ├── app/
@@ -337,7 +401,11 @@ data-analyst/
 │   ├── validator.py            # Deterministic integer arithmetic checkers (general 3-tier & unit 5-point)
 │   └── workflow.py             # LangGraph state machines (`run_workflow` & `run_unit_workflow`) & spool routers
 ├── examples/                   # Sample Chilean condominium PDFs (building reports & unit bills)
-└── tests/                      # Phase 1 & Phase 3 unit and integration tests
+├── frontend/                   # Phase 4: Ephemeral Chainlit Web Interface & Firebase Auth
+│   ├── app.py                  # Chainlit callbacks (auth, chat start, message, action buttons, charts)
+│   ├── auth.py                 # Firebase Identity Toolkit REST verification & local dev credential map
+│   └── chainlit.md             # Chainlit welcome screen markdown
+└── tests/                      # Phase 1, Phase 3 & Phase 4 unit and integration tests
 ```
 
 

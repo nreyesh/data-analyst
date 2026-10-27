@@ -121,7 +121,10 @@ def planner_node(state: DataAnalystState, client: genai.Client | None = None) ->
     )
 
     user_choice = state.get("user_clarification_choice")
+    pre_target_unit = state.get("target_unit")
     query_context = f"User Query: {state['user_query']}"
+    if pre_target_unit:
+        query_context += f"\nTarget Unit Context: {pre_target_unit}"
     if user_choice:
         query_context += f"\nUser Clarification / Selected Focus: {user_choice}"
 
@@ -134,6 +137,17 @@ def planner_node(state: DataAnalystState, client: genai.Client | None = None) ->
     )
 
     plan = IntentPlan.model_validate_json(response.text)
+
+    if pre_target_unit and not plan.target_unit:
+        is_macro_only = bool(
+            re.search(
+                r"\b(total del edificio|gasto operacional del edificio|edificio completo)\b",
+                state.get("user_query", ""),
+                re.I,
+            )
+        ) and not bool(re.search(r"\b(mi|mio|mío|depto|departamento|unidad)\b", state.get("user_query", ""), re.I))
+        if not is_macro_only:
+            plan.target_unit = pre_target_unit
 
     # Resolve tower from user clarification choice if available
     if user_choice:
@@ -828,7 +842,7 @@ def synthesizer_node(state: DataAnalystState, client: genai.Client | None = None
         f"Analysis Archetype: {plan.analysis_type if plan else 'scalar_lookup'}\n"
         f"{trajectory_context}"
         f"Verified Database Results: {json.dumps(rows, ensure_ascii=False)}\n"
-        f"Chart Image File Path: {chart_path or 'No chart generated'}"
+        f"Chart Rendered: {'Yes (attached automatically by UI; do NOT emit ![...](...) markdown image links)' if chart_path else 'No chart generated'}"
     ]
 
     response = generate_content_with_fallback(
@@ -837,7 +851,9 @@ def synthesizer_node(state: DataAnalystState, client: genai.Client | None = None
         config=config,
     )
 
-    markdown = response.text or "No se pudo generar la síntesis del reporte."
+    raw_markdown = response.text or "No se pudo generar la síntesis del reporte."
+    # Deterministically strip any hallucinated markdown image tags (![alt](path)) so local paths never 404 in web UI
+    markdown = re.sub(r"!\[[^\]]*\]\([^)]+\)\n?", "", raw_markdown).strip()
     logger.info("Synthesizer produced markdown summary: length=%d", len(markdown))
 
     return {

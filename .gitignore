@@ -74,6 +74,8 @@ openspec/
 .agent/
 data_posts/
 data_post/
+.chainlit/translations/
+.files/
 
 # Backups and temporary files
 * copy.md
